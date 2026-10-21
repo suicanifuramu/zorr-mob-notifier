@@ -123,6 +123,21 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(replay["data"]["id"], fresh["id"])
         resumed.close()
 
+    async def test_polling_snapshot_delta_and_cursor_reset(self):
+        first = self.service.publish(event(self.service.parser, key="history", historical=True))
+        response = await self.client.get("/api/events", headers=self.headers)
+        initial = await response.json()
+        self.assertTrue(initial["snapshot"])
+        self.assertEqual(initial["cursor"], first["id"])
+        fresh = self.service.publish(event(self.service.parser, key="live"))
+        response = await self.client.get(f"/api/events?after={first['id']}", headers=self.headers)
+        delta = await response.json()
+        self.assertFalse(delta["snapshot"])
+        self.assertEqual([e["id"] for e in delta["events"]], [fresh["id"]])
+        self.assertFalse(delta["events"][0]["historical"])
+        response = await self.client.get("/api/events?after=999", headers=self.headers)
+        self.assertTrue((await response.json())["snapshot"])
+
     async def test_expired_and_future_cursor_reset_to_silent_snapshot(self):
         for i in range(5):
             self.service.publish(event(self.service.parser, key=str(i)))

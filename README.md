@@ -68,7 +68,11 @@ Certbot's TLS configuration. Existing virtual hosts are preserved.
 
 The bot saves up to 2,000 structured spawn events in `var/spawns.sqlite3`.
 `GET /api/stream` supports `Last-Event-ID` / `?after=` for SSE resumption;
-`GET /api/status` reports Discord connectivity and parser failures. Both require
+`GET /api/events?after=` offers the same snapshot/delta protocol as JSON.
+Browsers use SSE first, then automatically fall back to five-second polling if
+a proxy buffers the stream or heartbeats stop. Both paths filter locally and
+deduplicate notifications using the same cursor and event keys.
+`GET /api/status` reports Discord connectivity and parser failures. All three require
 `Authorization: Bearer <API_TOKEN>`. `/healthz` is a public liveness endpoint.
 The API publishes spawn metadata and links, not arbitrary channel messages,
 author details, or Discord credentials.

@@ -66,6 +66,22 @@ def sse(event: str, data: dict, cursor: int | None = None) -> bytes:
     return (prefix + f"event: {event}\ndata: " + json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n\n").encode()
 
 
+def read_cursor(request: web.Request) -> int:
+    raw = request.headers.get("Last-Event-ID") or request.query.get("after", "0")
+    if not raw.isdecimal() or len(raw) > 16:
+        raise web.HTTPBadRequest(text="Invalid cursor")
+    return int(raw)
+
+
+def history_payload(service: SpawnService, after: int) -> dict:
+    current = service.store.cursor
+    expired = after > current or (after and after < service.store.first_id - 1)
+    snapshot = not after or bool(expired)
+    return {"snapshot": snapshot, "reset": bool(expired), "cursor": current,
+            "events": service.store.latest() if snapshot else service.store.after(after),
+            "status": service.status()}
+
+
 def create_app(service: SpawnService, token: str, *, heartbeat: float = 15) -> web.Application:
     if not token:
         raise ValueError("API_TOKEN is required for --serve")
@@ -86,11 +102,11 @@ def create_app(service: SpawnService, token: str, *, heartbeat: float = 15) -> w
     async def status(_):
         return web.json_response(service.status(), headers={"Cache-Control": "no-store"})
 
+    async def events(request):
+        return web.json_response(history_payload(service, read_cursor(request)), headers={"Cache-Control": "no-store"})
+
     async def stream(request):
-        raw = request.headers.get("Last-Event-ID") or request.query.get("after", "0")
-        if not raw.isdecimal() or len(raw) > 16:
-            raise web.HTTPBadRequest(text="Invalid cursor")
-        after = int(raw)
+        after = read_cursor(request)
         if len(service.listeners) >= 1000:
             raise web.HTTPServiceUnavailable(text="Stream capacity reached")
         queue: asyncio.Queue = asyncio.Queue(maxsize=128)
@@ -102,14 +118,12 @@ def create_app(service: SpawnService, token: str, *, heartbeat: float = 15) -> w
         try:
             await response.prepare(request)
             await response.write(b"retry: 5000\n\n")
-            current = service.store.cursor
-            expired = after > current or (after and after < service.store.first_id - 1)
-            if not after or expired:
-                await response.write(sse("snapshot", {"events": service.store.latest(), "cursor": current,
-                                                          "reset": bool(expired), "status": service.status()}, current))
-                after = current
+            history = history_payload(service, after)
+            if history["snapshot"]:
+                await response.write(sse("snapshot", history, history["cursor"]))
+                after = history["cursor"]
             else:
-                for event in service.store.after(after):
+                for event in history["events"]:
                     await response.write(sse("spawn", {**event, "replay": True}, event["id"]))
                     after = event["id"]
             await response.write(sse("status", service.status()))
@@ -131,5 +145,6 @@ def create_app(service: SpawnService, token: str, *, heartbeat: float = 15) -> w
 
     app.router.add_get("/healthz", health)
     app.router.add_get("/api/status", status)
+    app.router.add_get("/api/events", events)
     app.router.add_get("/api/stream", stream)
     return app

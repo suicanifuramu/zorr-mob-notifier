@@ -5,6 +5,7 @@ const $=id=>document.getElementById(id);
 const make=(tag,className,text)=>{const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node};
 let catalog,settings,stream,registration,editingId=null;
 let events=[],streamConnected=false,botStatus=null,toastTimer,reconnectTimer,streamCursor=0;
+let polling=false,pollTimer,connectionTimer,connectionFailures=0;
 const permission=()=>('Notification' in window?Notification.permission:'unsupported');
 const timeFormat=new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
 const dateFormat=new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'});
@@ -151,30 +152,55 @@ function renderConnection(){
   $('connection').querySelector('span').textContent=botStatus?.demo?'Demo feed':!streamConnected?'Reconnecting…':online?'Live · connected':'Discord reconnecting…';
   if(botStatus?.lastSpawnAt)$('last-update').textContent=`Last spawn ${timeFormat.format(new Date(botStatus.lastSpawnAt))}`;
 }
+function applySnapshot(data){
+  events=(data.events||[]).filter(e=>validEvent(catalog,e)).sort((a,b)=>b.id-a.id).slice(0,200);
+  streamCursor=data.cursor||0;botStatus=data.status;streamConnected=true;renderConnection();renderFeed();
+  // History, including after a cursor reset, must never generate notifications.
+  const target=location.hash&&document.getElementById(location.hash.slice(1));target?.scrollIntoView({block:'center'});
+}
+function applySpawn(event){
+  if(!validEvent(catalog,event)||events.some(e=>e.key===event.key))return;
+  streamCursor=Math.max(streamCursor,event.id);events=[event,...events].sort((a,b)=>b.id-a.id).slice(0,200);
+  if(botStatus)botStatus.lastSpawnAt=event.createdAt;renderFeed();renderConnection();void notifySpawn(event);
+}
+function resetHeartbeat(){clearTimeout(connectionTimer);connectionTimer=setTimeout(startPolling,45000)}
+async function pollEvents(){
+  try{
+    const response=await fetch(`/api/events?after=${streamCursor}`,{cache:'no-store',signal:AbortSignal.timeout(15000)});
+    if(!response.ok)throw new Error('Event request failed');
+    const data=await response.json();if(!Array.isArray(data.events))throw new Error('Invalid event response');
+    if(data.snapshot)applySnapshot(data);else{for(const event of data.events)applySpawn(event);streamCursor=Math.max(streamCursor,data.cursor||0);botStatus=data.status;streamConnected=true;renderConnection()}
+  }catch{streamConnected=false;renderConnection()}
+  finally{pollTimer=setTimeout(pollEvents,5000)}
+}
+function startPolling(){
+  if(polling)return;
+  polling=true;clearTimeout(reconnectTimer);clearTimeout(connectionTimer);clearTimeout(pollTimer);stream?.close();void pollEvents();
+}
 function connect(){
   clearTimeout(reconnectTimer);
+  if(polling)return;
+  clearTimeout(connectionTimer);connectionTimer=setTimeout(startPolling,12000);
   stream=new EventSource(`/api/stream${streamCursor?`?after=${streamCursor}`:''}`);
-  stream.onopen=()=>{streamConnected=true;renderConnection()};
+  stream.onopen=()=>{if(polling)return;connectionFailures=0;streamConnected=true;resetHeartbeat();renderConnection()};
   stream.addEventListener('status',event=>{
+    if(polling)return;
     try{botStatus=JSON.parse(event.data);streamConnected=true;renderConnection();
+      resetHeartbeat();
       if(botStatus.demo)notice('デモ配信です。表示される出現はテストデータです。',false,{persistent:true});
     }catch{}
   });
   stream.addEventListener('snapshot',event=>{
-    try{const data=JSON.parse(event.data);events=(data.events||[]).filter(e=>validEvent(catalog,e)).sort((a,b)=>b.id-a.id).slice(0,200);streamCursor=data.cursor||0;botStatus=data.status;streamConnected=true;renderConnection();renderFeed();
-      // A snapshot is history, including after a cursor reset: never notify it.
-      const target=location.hash&&document.getElementById(location.hash.slice(1));target?.scrollIntoView({block:'center'});
-    }catch{}
+    if(polling)return;
+    try{applySnapshot(JSON.parse(event.data));resetHeartbeat()}catch{}
   });
   stream.addEventListener('spawn',message=>{
-    try{const event=JSON.parse(message.data);if(!validEvent(catalog,event)||events.some(e=>e.key===event.key))return;
-      streamCursor=Math.max(streamCursor,event.id);events=[event,...events].sort((a,b)=>b.id-a.id).slice(0,200);
-      if(botStatus)botStatus.lastSpawnAt=event.createdAt;renderFeed();renderConnection();void notifySpawn(event);
-    }catch{}
+    if(polling)return;
+    try{applySpawn(JSON.parse(message.data));resetHeartbeat()}catch{}
   });
-  stream.onerror=()=>{streamConnected=false;renderConnection();if(!events.length){$('empty-feed-title').textContent='配信に再接続しています';$('empty-feed-description').textContent='接続が戻ると自動でログを再開します。'}
+  stream.onerror=()=>{if(polling)return;streamConnected=false;renderConnection();if(!events.length){$('empty-feed-title').textContent='配信に再接続しています';$('empty-feed-description').textContent='接続が戻ると自動でログを再開します。'}
     // HTTP 502/503 can put native EventSource in CLOSED, which will not retry.
-    if(stream.readyState===EventSource.CLOSED){stream.close();reconnectTimer=setTimeout(connect,5000)}
+    if(stream.readyState===EventSource.CLOSED){stream.close();if(++connectionFailures>=2)startPolling();else reconnectTimer=setTimeout(connect,5000)}
   };
 }
 

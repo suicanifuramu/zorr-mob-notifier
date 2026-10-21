@@ -13,7 +13,7 @@ export async function proxy(context, path, {stream=false}={}) {
   const incoming=new URL(context.request.url);
   const after=incoming.searchParams.get('after');
   const last=context.request.headers.get('Last-Event-ID');
-  if(stream && (after || last)){
+  if((stream || path==='/api/events') && (after || last)){
     const cursor=last || after;
     if(!/^\d{1,16}$/.test(cursor))return Response.json({error:'Invalid event cursor.'},{status:400,headers});
     url.searchParams.set('after',cursor);

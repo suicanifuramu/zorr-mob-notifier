@@ -19,6 +19,11 @@ test('unconfigured proxy and invalid backend fail closed without leaking details
   assert.equal((await proxy({request,env:{}},'/api/status')).status,503);
   assert.equal((await proxy({request,env:{BOT_API_URL:'http://public.example.com',BOT_API_TOKEN:'a'}},'/api/status')).status,503);
 });
+test('JSON polling forwards the same bounded cursor without accepting arbitrary paths',async()=>{
+  const original=globalThis.fetch;let requested;
+  globalThis.fetch=async url=>{requested=url.href;return Response.json({events:[]})};
+  try{await proxy({request:new Request('https://notifier.pages.dev/api/events?after=101'),env:{BOT_API_URL:'https://bot.example.com',BOT_API_TOKEN:'x'}},'/api/events');assert.equal(requested,'https://bot.example.com/api/events?after=101')}finally{globalThis.fetch=original}
+});
 test('upstream auth/error pages are not streamed to browsers',async()=>{
   const original=globalThis.fetch;
   globalThis.fetch=async()=>new Response('upstream private diagnostics',{status:401});
