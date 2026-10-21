@@ -146,9 +146,46 @@ class ChannelReader(discord.Client):
             self.service.ingest(message)
 
     async def on_message_edit(self, before: discord.Message, after: discord.Message) -> None:
-        # Some announcements arrive before their embed is populated.
+        # Some announcements arrive before their embed is populated. Cached
+        # messages (including the in-place "Mob Defeated!" edit) arrive here;
+        # uncached edits are handled by on_raw_message_edit.
         if self.service and getattr(after.guild, "id", None) == GUILD_ID and after.channel.id == CHANNEL_ID:
-            self.service.ingest(after)
+            changes = self.service.ingest(after)
+            if changes and any(change.get("type") == "death" for change in changes):
+                log.info("Recorded death for message %s", after.id)
+
+    async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent) -> None:
+        # Announcement messages are not cached after a restart or when they
+        # predate the gateway session, so history() cannot populate the cache.
+        # Fetch the configured channel's current revision instead of trusting
+        # the possibly partial gateway payload.
+        if not self.service or payload.channel_id != CHANNEL_ID:
+            return
+        if payload.guild_id is not None and payload.guild_id != GUILD_ID:
+            return
+        if getattr(payload, "cached_message", None) is not None:
+            return  # on_message_edit already handles cached messages
+        channel = self._channel or self.get_channel(CHANNEL_ID)
+        if channel is None:
+            try:
+                channel = await self.fetch_channel(CHANNEL_ID)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
+                log.warning("Cannot fetch channel %s for an edited message: %s", CHANNEL_ID, exc)
+                return
+            self._channel = channel
+        try:
+            message = await channel.fetch_message(payload.message_id)
+        except (discord.NotFound, discord.Forbidden) as exc:
+            log.warning("Cannot fetch edited message %s: %s", payload.message_id, exc)
+            return
+        except discord.HTTPException as exc:
+            log.warning("Discord rejected the edited message fetch for %s: %s", payload.message_id, exc)
+            return
+        if getattr(getattr(message, "channel", None), "id", None) != CHANNEL_ID:
+            return
+        changes = self.service.ingest(message)
+        if changes:
+            log.info("Recorded %s update for message %s", changes[-1].get("type", "spawn"), message.id)
 
     async def on_resumed(self) -> None:
         if self.service:
@@ -163,7 +200,9 @@ class ChannelReader(discord.Client):
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--limit", type=int, default=20, help="messages to backfill on start (default 20)"
+        "--limit", type=int, default=20,
+        help="messages to backfill on start (default 20; the installed service uses 500 "
+             "to reconcile recent deaths)",
     )
     parser.add_argument(
         "--no-backfill", action="store_true", help="skip the history dump on start"

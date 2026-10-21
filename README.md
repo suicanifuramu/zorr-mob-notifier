@@ -47,6 +47,15 @@ tabs through an atomic IndexedDB transaction; in storage-restricted browsers the
 fallback is per tab. The service worker handles notification clicks; it is not a
 Web Push service.
 
+A spawn announcement is edited in place by the game when the mob dies. That
+edit marks the same feed row dead without moving it: the row keeps its original
+key, ID, and spawn time, shows a large X and strikethrough, and reads
+`Dead by ＠username` or simply `Dead` when the game omitted the killer. Killer
+names are literal game usernames, so underscores and similar characters are
+preserved. A defeat alert uses the edit time as the death time and its own
+notification key, so a spawn and its later death each alert once. Kills are
+matched only by the exact Discord message ID, never by mob name or timing.
+
 ## Local web development
 
 ```sh
@@ -84,16 +93,34 @@ The installer creates a systemd service, an nginx virtual host with buffering
 disabled, and a Certbot certificate with automatic renewal. Repeated runs retain
 Certbot's TLS configuration. Existing virtual hosts are preserved.
 
-The bot saves up to 2,000 structured spawn events in `var/spawns.sqlite3`.
+The installed unit starts with `--limit 500` so startup history reconciliation
+covers roughly 1.5 hours of announcements at the observed rate; mobs have been
+seen alive for over an hour. Editing the service template does not update an
+already installed unit: re-run the installer or change `ExecStart` in
+`/etc/systemd/system/zorr-mob-notifier.service` and run
+`sudo systemctl daemon-reload && sudo systemctl restart zorr-mob-notifier`.
+The console reader keeps its smaller default (`--limit 20`).
+
+The bot keeps up to 2,000 current spawn records in `var/spawns.sqlite3`. A
+death mutates its spawn record in place; a separate bounded change log (4,000
+revisions) supplies the monotonic delivery cursor, so a death never creates a
+second feed row and its stable ID and key never change. Old databases migrate
+automatically on startup: each existing row becomes its initial `spawn` change
+at the same cursor ID, preserving stable IDs, sparse ID gaps, and client
+cursors. Existing files are never reset.
 `GET /api/stream` supports `Last-Event-ID` / `?after=` for SSE resumption;
 `GET /api/events?after=` offers the same snapshot/delta protocol as JSON.
+Snapshots contain current records (with `type`, `dead`, `sequence`, `killedBy`,
+and `killedAt`); deltas are flat spawn/death change records ordered by change
+cursor. An expired cursor produces a silent snapshot with `reset: true`.
 Browsers use SSE first, then automatically fall back to five-second polling if
 a proxy buffers the stream or heartbeats stop. Both paths filter locally and
-deduplicate notifications using the same cursor and event keys.
-`GET /api/status` reports Discord connectivity and parser failures. All three require
-`Authorization: Bearer <API_TOKEN>`. `/healthz` is a public liveness endpoint.
-The API publishes spawn metadata and links, not arbitrary channel messages,
-author details, or Discord credentials.
+deduplicate notifications using the same cursor, stable keys, and event types.
+`GET /api/status` reports Discord connectivity, parser failures, and the last
+spawn/death times. All three require `Authorization: Bearer <API_TOKEN>`.
+`/healthz` is a public liveness endpoint.
+The API publishes spawn/death metadata and links, not arbitrary channel
+messages, author details, or Discord credentials.
 
 ## Cloudflare Pages — GitHub integration
 
@@ -129,9 +156,11 @@ npm run test:python
 npm run build
 ```
 
-The tests cover the real spawn announcement forms, all current mob names,
-crafted/defeated exclusion, persistent deduplication, SSE history/replay/reset,
-authenticated proxy behavior, and petal/mob/variant filter semantics.
+The tests cover the real spawn and defeat announcement forms, all current mob
+names, crafted/unknown exclusion, exact-message death correlation, killer
+parsing, persistent deduplication without resurrection, old-schema migration,
+retention/cursor resets, and SSE history/replay/reset. They also cover
+authenticated proxy behavior and petal/mob/variant filter semantics.
 
 Prepared data is in `data/`, images and the font in `public/assets/`. To regenerate
 them from the audited local research outputs, run `npm run assets`. This manual
@@ -176,7 +205,7 @@ Never commit it, never share it (`.env` is gitignored).
 
 ```bash
 uv run python main.py                 # last 20 messages, then live stream
-uv run python main.py --limit 100     # bigger backfill
+uv run python main.py --limit 500     # reconcile recent deaths (~1.5h of announcements)
 uv run python main.py --no-backfill   # live stream only
 uv run python main.py -v              # debug logs
 ```

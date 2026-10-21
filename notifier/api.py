@@ -16,6 +16,14 @@ def now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def is_death(event: dict) -> bool:
+    return event.get("type") == "death" or event.get("dead") is True
+
+
+def event_name(event: dict) -> str:
+    return "death" if is_death(event) else "spawn"
+
+
 class SpawnService:
     def __init__(self, store: EventStore, *, demo: bool = False) -> None:
         self.store = store
@@ -26,30 +34,49 @@ class SpawnService:
         self.started_at = now()
         self.last_message_at = None
         self.last_spawn_at = None
+        self.last_death_at = None
         self.backfill_complete = False
         self.unparsed_spawns = 0
+        self.unparsed_deaths = 0
 
     def status(self) -> dict:
         return {"connected": self.connected, "demo": self.demo, "startedAt": self.started_at,
                 "lastMessageAt": self.last_message_at, "lastSpawnAt": self.last_spawn_at,
+                "lastDeathAt": self.last_death_at,
                 "backfillComplete": self.backfill_complete, "cursor": self.store.cursor,
-                "unparsedSpawns": self.unparsed_spawns}
+                "unparsedSpawns": self.unparsed_spawns, "unparsedDeaths": self.unparsed_deaths}
 
-    def ingest(self, message, *, historical: bool = False) -> None:
+    def ingest(self, message, *, historical: bool = False) -> list[dict]:
         self.last_message_at = now()
         texts = message_texts(message)
-        events = self.parser.parse(texts, message_id=str(message.id), created_at=message.created_at,
-                                   source_url=message.jump_url, historical=historical)
+        message_id = str(message.id)
+        source_url = getattr(message, "jump_url", "") or ""
+        deaths = self.parser.parse_death(
+            texts, message_id=message_id, created_at=message.created_at,
+            edited_at=getattr(message, "edited_at", None),
+            source_url=source_url, historical=historical,
+        )
+        if deaths:
+            return [event for event in (self.publish(item) for item in deaths) if event]
+        if any("defeated" in text.lower() for text in texts):
+            self.unparsed_deaths += 1
+        events = self.parser.parse(texts, message_id=message_id, created_at=message.created_at,
+                                   source_url=source_url, historical=historical)
         if not events and any("has spawned" in text.lower() for text in texts):
             self.unparsed_spawns += 1
-        for event in events:
-            self.publish(event)
+        return [event for event in (self.publish(item) for item in events) if event]
 
     def publish(self, event: dict) -> dict | None:
-        event = self.store.add(event)
+        if is_death(event):
+            event = self.store.add_death(event)
+        else:
+            event = self.store.add_spawn(event)
         if not event:
             return None
-        self.last_spawn_at = event["createdAt"]
+        if is_death(event):
+            self.last_death_at = event.get("killedAt")
+        else:
+            self.last_spawn_at = event["createdAt"]
         for queue in tuple(self.listeners):
             if queue.full():
                 # Disconnect a slow reader, which can resume from its persisted cursor.
@@ -124,17 +151,17 @@ def create_app(service: SpawnService, token: str, *, heartbeat: float = 15) -> w
                 after = history["cursor"]
             else:
                 for event in history["events"]:
-                    await response.write(sse("spawn", {**event, "replay": True}, event["id"]))
-                    after = event["id"]
+                    await response.write(sse(event_name(event), {**event, "replay": True}, event["sequence"]))
+                    after = event["sequence"]
             await response.write(sse("status", service.status()))
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), timeout=heartbeat)
                     if event is None:
                         break
-                    if event["id"] > after:
-                        await response.write(sse("spawn", event, event["id"]))
-                        after = event["id"]
+                    if event["sequence"] > after:
+                        await response.write(sse(event_name(event), event, event["sequence"]))
+                        after = event["sequence"]
                 except asyncio.TimeoutError:
                     await response.write(sse("status", service.status()))
         except (ConnectionResetError, ConnectionError):

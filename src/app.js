@@ -2,6 +2,7 @@ import {indexCatalog,matchingRules,dropsFor,validateRule,validEvent,normalizeNam
 import {loadSettings,saveSettings,claimNotification} from './storage.js';
 import {createElement,Bell,BellRing,BellOff} from 'lucide';
 import {dropProbabilities,formatProbability} from './probability.js';
+import {eventSequence,isDeath,normalizeKiller,notificationKey,deathNotificationTitle,canNotifyDeath,mergeEvent} from './lifecycle.js';
 
 const $=id=>document.getElementById(id);
 const make=(tag,className,text)=>{const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node};
@@ -54,13 +55,17 @@ function renderFeed(){
   const feed=$('feed'),fragment=document.createDocumentFragment();
   for(const event of filtered.slice(0,100)){
     const mob=catalog.mobBySlug.get(event.mob),rarity=catalog.rarities[event.rarity],variant=catalog.variantBySlug.get(event.variant);
-    const matches=matchingRules(catalog,event,settings.rules),row=make('article',`spawn${matches.length?' match':''}`);row.id=`spawn-${event.id}`;
-    row.append(sprite('mob',mob,{rarity:event.rarity}));
+    const matches=matchingRules(catalog,event,settings.rules),dead=isDeath(event),killer=normalizeKiller(event.killedBy);
+    const row=make('article',`spawn${matches.length?' match':''}${dead?' dead':''}`);row.id=`spawn-${event.id}`;
+    const icon=sprite('mob',mob,{rarity:event.rarity});
+    if(dead){const mark=make('span','death-mark');mark.setAttribute('aria-hidden','true');icon.append(mark)}
+    row.append(icon);
     const main=make('div','spawn-main'),meta=make('div','spawn-meta');const r=make('span','',rarity.name);r.style.color=rarity.color;meta.append(r);
     if(event.variant!=='normal'){const badge=make('span','variant-badge',variant.name);badge.style.setProperty('--variant-color',variant.color);meta.append(badge)}
     if(event.source==='demo')meta.append(make('span','variant-badge','DEMO'));
     if(matches.length)meta.append(make('span','match-label','Match'));
     main.append(meta,make('div','spawn-name',mob.name));
+    if(dead)main.append(make('div','spawn-status',killer?`Dead by ＠${killer}`:'Dead'));
     const drops=dropsFor(catalog,event),dropRow=make('div','spawn-drops');
     for(const drop of drops.slice(0,5)){
       const wanted=matches.some(rule=>rule.kind==='petal'&&rule.target===drop.petal.slug);
@@ -214,6 +219,15 @@ async function notifySpawn(event){
   const labels=[...new Set(rules.map(ruleName))].join(', ');
   await showNotification(`${event.name} spawned!`,`Filters: ${labels}`,{tag:`zorr-${event.key}`,eventId:event.id});
 }
+async function notifyDeath(event){
+  if(!settings.enabled||permission()!=='granted'||!canNotifyDeath(event))return;
+  const rules=matchingRules(catalog,event,settings.rules);if(!rules.length)return;
+  // A different namespace keeps a spawn alert from suppressing its death alert,
+  // while repeated death corrections still resolve to the same claim.
+  if(!await claimNotification(notificationKey(event)))return;
+  const labels=[...new Set(rules.map(ruleName))].join(', ');
+  await showNotification(deathNotificationTitle(event),`Filters: ${labels}`,{tag:`zorr-death-${event.key}`,eventId:event.id});
+}
 
 function renderConnection(){
   const online=streamConnected&&botStatus?.connected;
@@ -227,10 +241,16 @@ function applySnapshot(data){
   // History, including after a cursor reset, must never generate notifications.
   const target=location.hash&&document.getElementById(location.hash.slice(1));target?.scrollIntoView({block:'center'});
 }
-function applySpawn(event){
-  if(!validEvent(catalog,event)||events.some(e=>e.key===event.key))return;
-  streamCursor=Math.max(streamCursor,event.id);events=[event,...events].sort((a,b)=>b.id-a.id).slice(0,200);
-  if(botStatus)botStatus.lastSpawnAt=event.createdAt;renderFeed();renderConnection();void notifySpawn(event);
+function applyEvent(event){
+  if(!validEvent(catalog,event))return;
+  const {events:next,action}=mergeEvent(events,event);
+  if(action==='stale'||action==='ignored')return;
+  events=next;
+  // Death events advance the change cursor too, but their stable id never moves.
+  streamCursor=Math.max(streamCursor,eventSequence(event));
+  if(!isDeath(event)&&botStatus)botStatus.lastSpawnAt=event.createdAt;
+  renderFeed();renderConnection();
+  if(isDeath(event))void notifyDeath(event);else void notifySpawn(event);
 }
 function resetHeartbeat(){clearTimeout(connectionTimer);connectionTimer=setTimeout(startPolling,45000)}
 async function pollEvents(){
@@ -238,7 +258,7 @@ async function pollEvents(){
     const response=await fetch(`/api/events?after=${streamCursor}`,{cache:'no-store',signal:AbortSignal.timeout(15000)});
     if(!response.ok)throw new Error('Event request failed');
     const data=await response.json();if(!Array.isArray(data.events))throw new Error('Invalid event response');
-    if(data.snapshot)applySnapshot(data);else{for(const event of data.events)applySpawn(event);streamCursor=Math.max(streamCursor,data.cursor||0);botStatus=data.status;streamConnected=true;renderConnection()}
+    if(data.snapshot)applySnapshot(data);else{for(const event of data.events)applyEvent(event);streamCursor=Math.max(streamCursor,data.cursor||0);botStatus=data.status;streamConnected=true;renderConnection()}
   }catch{streamConnected=false;renderConnection()}
   finally{pollTimer=setTimeout(pollEvents,5000)}
 }
@@ -265,7 +285,11 @@ function connect(){
   });
   stream.addEventListener('spawn',message=>{
     if(polling)return;
-    try{applySpawn(JSON.parse(message.data));resetHeartbeat()}catch{}
+    try{applyEvent(JSON.parse(message.data));resetHeartbeat()}catch{}
+  });
+  stream.addEventListener('death',message=>{
+    if(polling)return;
+    try{applyEvent(JSON.parse(message.data));resetHeartbeat()}catch{}
   });
   stream.onerror=()=>{if(polling)return;streamConnected=false;renderConnection();if(!events.length)$('empty-feed-title').textContent='Reconnecting to spawn feed…';
     // HTTP 502/503 can put native EventSource in CLOSED, which will not retry.

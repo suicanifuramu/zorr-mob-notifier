@@ -1,0 +1,299 @@
+{
+  "_note": "Anonymized lifecycle fixture derived from observed live payloads. Message IDs, timestamps, and thumbnail URLs are synthetic but internally consistent. Tests must use only this tracked file, never gitignored research/var data.",
+  "_observedForms": {
+    "knownKiller": "<Mob name> was defeated by @<username> with <damage>% damage!",
+    "unknownKiller": "<Mob name> was defeated!",
+    "killerSyntax": "literal @name in embed.description; mentions is [] and no user ID is present; underscores belong to the name",
+    "editModel": "same message ID is edited in place; timestamp stays spawn time; edited_timestamp is death time; thumbnail URL is replaced with red-X artwork"
+  },
+  "fixtures": {
+    "edit_known_killer": {
+      "before": {
+        "id": "900000000000000001",
+        "channel_id": "900000000000000000",
+        "guild_id": "900000000000000099",
+        "content": "",
+        "timestamp": "2026-10-21T12:00:00.000000+00:00",
+        "edited_timestamp": null,
+        "mentions": [],
+        "attachments": [],
+        "embeds": [
+          {
+            "type": "rich",
+            "title": "Mob Spawned!",
+            "description": "A Magic Omega Bubble has spawned!",
+            "color": 15935961,
+            "thumbnail": {
+              "url": "https://cdn.discordapp.com/attachments/900000000000000000/900000000000000101/image.png",
+              "width": 100,
+              "height": 100,
+              "content_type": "image/png"
+            },
+            "content_scan_version": 4
+          }
+        ]
+      },
+      "after": {
+        "id": "900000000000000001",
+        "channel_id": "900000000000000000",
+        "guild_id": "900000000000000099",
+        "content": "",
+        "timestamp": "2026-10-21T12:00:00.000000+00:00",
+        "edited_timestamp": "2026-10-21T12:05:00.000000+00:00",
+        "mentions": [],
+        "attachments": [],
+        "embeds": [
+          {
+            "type": "rich",
+            "title": "Mob Defeated!",
+            "description": "A Magic Omega Bubble was defeated by @user_name with 87.722% damage!",
+            "color": 15935961,
+            "thumbnail": {
+              "url": "https://cdn.discordapp.com/attachments/900000000000000000/900000000000000102/image.png",
+              "width": 100,
+              "height": 100,
+              "content_type": "image/png"
+            },
+            "content_scan_version": 4
+          }
+        ]
+      },
+      "expected": {
+        "messageId": "900000000000000001",
+        "mob": "bubble",
+        "rarity": 8,
+        "variant": "magic",
+        "name": "Magic Omega Bubble",
+        "spawnedAt": "2026-10-21T12:00:00Z",
+        "diedAt": "2026-10-21T12:05:00Z",
+        "status": "dead",
+        "killer": "user_name",
+        "killerKnown": true,
+        "damagePct": 87.722
+      }
+    },
+    "edit_unknown_killer": {
+      "before": {
+        "id": "900000000000000002",
+        "channel_id": "900000000000000000",
+        "guild_id": "900000000000000099",
+        "content": "",
+        "timestamp": "2026-10-21T12:42:22.613000+00:00",
+        "edited_timestamp": null,
+        "mentions": [],
+        "attachments": [],
+        "embeds": [
+          {
+            "type": "rich",
+            "title": "Mob Spawned!",
+            "description": "An Omega Urchin has spawned!",
+            "color": 15935961,
+            "thumbnail": {
+              "url": "https://cdn.discordapp.com/attachments/900000000000000000/900000000000000201/image.png",
+              "width": 100,
+              "height": 100,
+              "content_type": "image/png"
+            },
+            "content_scan_version": 4
+          }
+        ]
+      },
+      "after": {
+        "id": "900000000000000002",
+        "channel_id": "900000000000000000",
+        "guild_id": "900000000000000099",
+        "content": "",
+        "timestamp": "2026-10-21T12:42:22.613000+00:00",
+        "edited_timestamp": "2026-10-21T12:54:40.571000+00:00",
+        "mentions": [],
+        "attachments": [],
+        "embeds": [
+          {
+            "type": "rich",
+            "title": "Mob Defeated!",
+            "description": "An Omega Urchin was defeated!",
+            "color": 15935961,
+            "thumbnail": {
+              "url": "https://cdn.discordapp.com/attachments/900000000000000000/900000000000000202/image.png",
+              "width": 100,
+              "height": 100,
+              "content_type": "image/png"
+            },
+            "content_scan_version": 4
+          }
+        ]
+      },
+      "expected": {
+        "messageId": "900000000000000002",
+        "mob": "urchin",
+        "rarity": 8,
+        "variant": "normal",
+        "name": "Omega Urchin",
+        "spawnedAt": "2026-10-21T12:42:22.613Z",
+        "diedAt": "2026-10-21T12:54:40.571Z",
+        "status": "dead",
+        "killer": null,
+        "killerKnown": false,
+        "damagePct": null
+      }
+    },
+    "alive_spawn": {
+      "message": {
+        "id": "900000000000000003",
+        "channel_id": "900000000000000000",
+        "guild_id": "900000000000000099",
+        "content": "",
+        "timestamp": "2026-10-21T13:03:24.811000+00:00",
+        "edited_timestamp": null,
+        "mentions": [],
+        "attachments": [],
+        "embeds": [
+          {
+            "type": "rich",
+            "title": "Mob Spawned!",
+            "description": "An Omega Stem Cell has spawned!",
+            "color": 15935961,
+            "thumbnail": {
+              "url": "https://cdn.discordapp.com/attachments/900000000000000000/900000000000000301/image.png",
+              "width": 100,
+              "height": 100,
+              "content_type": "image/png"
+            },
+            "content_scan_version": 4
+          }
+        ]
+      },
+      "expected": {
+        "messageId": "900000000000000003",
+        "mob": "stem_cell",
+        "rarity": 8,
+        "variant": "normal",
+        "name": "Omega Stem Cell",
+        "spawnedAt": "2026-10-21T13:03:24.811Z",
+        "diedAt": null,
+        "status": "alive"
+      }
+    },
+    "killer_underscores": {
+      "message": {
+        "id": "900000000000000004",
+        "channel_id": "900000000000000000",
+        "guild_id": "900000000000000099",
+        "content": "",
+        "timestamp": "2026-10-21T12:10:00.000000+00:00",
+        "edited_timestamp": "2026-10-21T12:20:00.000000+00:00",
+        "mentions": [],
+        "attachments": [],
+        "embeds": [
+          {
+            "type": "rich",
+            "title": "Mob Defeated!",
+            "description": "A Demonic Omega Tumbleweed was defeated by @_DNA_ with 12.5% damage!",
+            "color": 15935961,
+            "thumbnail": {
+              "url": "https://cdn.discordapp.com/attachments/900000000000000000/900000000000000401/image.png",
+              "width": 100,
+              "height": 100,
+              "content_type": "image/png"
+            },
+            "content_scan_version": 4
+          }
+        ]
+      },
+      "expected": {
+        "messageId": "900000000000000004",
+        "mob": "tumbleweed",
+        "rarity": 8,
+        "variant": "demonic",
+        "name": "Demonic Omega Tumbleweed",
+        "spawnedAt": "2026-10-21T12:10:00Z",
+        "diedAt": "2026-10-21T12:20:00Z",
+        "killer": "_DNA_",
+        "killerKnown": true
+      }
+    },
+    "simultaneous_identical_mobs": {
+      "first": {
+        "id": "900000000000000005",
+        "channel_id": "900000000000000000",
+        "guild_id": "900000000000000099",
+        "content": "",
+        "timestamp": "2026-10-21T12:40:20.223000+00:00",
+        "edited_timestamp": null,
+        "mentions": [],
+        "attachments": [],
+        "embeds": [
+          {
+            "type": "rich",
+            "title": "Mob Spawned!",
+            "description": "An Omega Momy has spawned!",
+            "color": 15935961,
+            "thumbnail": {
+              "url": "https://cdn.discordapp.com/attachments/900000000000000000/900000000000000501/image.png",
+              "width": 100,
+              "height": 100,
+              "content_type": "image/png"
+            },
+            "content_scan_version": 4
+          }
+        ]
+      },
+      "second": {
+        "id": "900000000000000006",
+        "channel_id": "900000000000000000",
+        "guild_id": "900000000000000099",
+        "content": "",
+        "timestamp": "2026-10-21T12:40:26.571000+00:00",
+        "edited_timestamp": null,
+        "mentions": [],
+        "attachments": [],
+        "embeds": [
+          {
+            "type": "rich",
+            "title": "Mob Spawned!",
+            "description": "An Omega Momy has spawned!",
+            "color": 15935961,
+            "thumbnail": {
+              "url": "https://cdn.discordapp.com/attachments/900000000000000000/900000000000000502/image.png",
+              "width": 100,
+              "height": 100,
+              "content_type": "image/png"
+            },
+            "content_scan_version": 4
+          }
+        ]
+      },
+      "second_defeated": {
+        "id": "900000000000000006",
+        "channel_id": "900000000000000000",
+        "guild_id": "900000000000000099",
+        "content": "",
+        "timestamp": "2026-10-21T12:40:26.571000+00:00",
+        "edited_timestamp": "2026-10-21T12:44:30.000000+00:00",
+        "mentions": [],
+        "attachments": [],
+        "embeds": [
+          {
+            "type": "rich",
+            "title": "Mob Defeated!",
+            "description": "An Omega Momy was defeated by @Ryan_xu with 55.0% damage!",
+            "color": 15935961,
+            "thumbnail": {
+              "url": "https://cdn.discordapp.com/attachments/900000000000000000/900000000000000503/image.png",
+              "width": 100,
+              "height": 100,
+              "content_type": "image/png"
+            },
+            "content_scan_version": 4
+          }
+        ]
+      },
+      "expected": {
+        "firstKey": "900000000000000005:0",
+        "secondKey": "900000000000000006:0",
+        "killer": "Ryan_xu",
+        "diedAt": "2026-10-21T12:44:30Z"
+      }
+    }
+  }
+}
