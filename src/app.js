@@ -1,12 +1,14 @@
 import {indexCatalog,matchingRules,dropsFor,validateRule,validEvent,normalizeName} from './matching.js';
 import {loadSettings,saveSettings,claimNotification} from './storage.js';
 import {createElement,Bell,BellRing,BellOff} from 'lucide';
+import {dropProbabilities,formatProbability} from './probability.js';
 
 const $=id=>document.getElementById(id);
 const make=(tag,className,text)=>{const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node};
 let catalog,settings,stream,registration,editingId=null,selectedTargetSlug=null;
 let events=[],streamConnected=false,botStatus=null,toastTimer,reconnectTimer,streamCursor=0;
 let polling=false,pollTimer,connectionTimer,connectionFailures=0;
+let permissionRequest;
 const permission=()=>('Notification' in window?Notification.permission:'unsupported');
 const timeFormat=new Intl.DateTimeFormat('en',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
 const dateFormat=new Intl.DateTimeFormat('en',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'});
@@ -21,10 +23,11 @@ function sprite(kind,item,{size='',rarity=7}={}){
   const node=make('span',`sprite ${size}`);node.setAttribute('role','img');node.setAttribute('aria-label',item.name);node.title=item.name;
   node.style.setProperty('--rarity-color',catalog.rarities[rarity].color);
   const columns=kind==='mob'?catalog.rendering.mobColumns:catalog.rendering.petalColumns;
-  const rows=Math.ceil((kind==='mob'?catalog.mobs:catalog.petals).length/columns);
+  const rows=Math.ceil((catalog.rendering[`${kind}Cells`]||(kind==='mob'?catalog.mobs:catalog.petals).length)/columns);
+  const cell=kind==='mob'?(item.iconIndex??item.id):(item.iconIndices?.[Math.min(7,rarity)]??item.id);
   const image=make('img');image.alt='';image.src=kind==='mob'?catalog.rendering.mobAtlas:catalog.rendering.petalAtlas;
   image.style.width=`${columns*100}%`;image.style.height=`${rows*100}%`;
-  image.style.left=`-${(item.id%columns)*100}%`;image.style.top=`-${Math.floor(item.id/columns)*100}%`;
+  image.style.left=`-${(cell%columns)*100}%`;image.style.top=`-${Math.floor(cell/columns)*100}%`;
   image.decoding='async';node.append(image);return node;
 }
 
@@ -76,10 +79,37 @@ function renderFeed(){
 }
 
 function showDrops(event){
-  $('drops-name').textContent=event.name;$('drop-grid').replaceChildren();
-  const drops=dropsFor(catalog,event);
-  for(const {petal,conditional} of drops){const box=make('div');box.append(sprite('petal',petal),make('small','',petal.name));if(conditional)box.append(make('span','conditional','Possible Flash drop'));$('drop-grid').append(box)}
-  if(!drops.length)$('drop-grid').append(make('p','drop-none','No known drops for this mob.'));
+  const mob=catalog.mobBySlug.get(event.mob),rarity=catalog.rarities[event.rarity];
+  $('drops-name').textContent=event.name||(mob?`${rarity?.name||''} ${mob.name}`.trim():'');
+  const grid=$('drop-grid');grid.replaceChildren();
+  const drops=dropsFor(catalog,event);let conditional=false;
+  for(const {petal,rolls=[]} of drops){
+    const row=make('div','drop-row'),summary=make('div','drop-summary'),cells=make('div','drop-rarities');
+    summary.append(make('div','drop-name',petal.name));
+    if(rolls.length&&rolls.every(roll=>roll.conditional))summary.append(make('small','conditional','Flash choice'));
+    const rates=new Map();
+    for(const [index,roll] of rolls.entries())for(const chance of dropProbabilities(event.rarity,roll.q)){
+      if(roll.conditional)conditional=true;
+      if(!rates.has(chance.rarity))rates.set(chance.rarity,[]);
+      rates.get(chance.rarity).push({...chance,conditional:roll.conditional,index});
+    }
+    for(const [dropRarity,chances] of [...rates].sort((a,b)=>a[0]-b[0])){
+      const info=catalog.rarities[dropRarity];if(!info)continue;
+      const cell=make('div','drop-cell'),label=make('div','drop-rarity',info.name);label.style.color=info.color;
+      cell.append(sprite('petal',petal,{rarity:dropRarity}),label);
+      for(const chance of chances){
+        const rate=make('div','drop-rate',formatProbability(chance.percent));
+        rate.title=`${chance.percent.toPrecision(8)}%${chance.conditional?' · conditional Flash extra':''}${rolls.length>1?` · roll ${chance.index+1}`:''}`;
+        if(chance.conditional||rolls.length>1)rate.append(make('small','drop-roll',chance.conditional?'Flash':`Roll ${chance.index+1}`));
+        cell.append(rate);
+      }
+      cells.append(cell);
+    }
+    row.append(summary,cells);grid.append(row);
+  }
+  if(!drops.length)grid.append(make('p','drop-none','No known drops for this mob.'));
+  const note=$('drop-note');note.hidden=!drops.length;
+  note.textContent=drops.length?`Base rates · before personal bonuses${conditional?' · Flash rates assume that extra drop is selected.':''}`:'';
   $('drops-dialog').showModal();
 }
 
@@ -122,24 +152,50 @@ function saveRule(event){
   save();renderRules();renderFeed();$('rule-dialog').close();
 }
 
+export function notificationState(permission,enabled){
+  const unsupported=permission==='unsupported',blocked=permission==='denied'||unsupported;
+  const active=permission==='granted'&&enabled===true;
+  return {active,disabled:unsupported,icon:blocked?'bell-off':active?'bell-ring':'bell',
+    label:unsupported?'Notifications unavailable':blocked?'Notifications blocked':active?'Notifications enabled — click to disable':'Notifications disabled — click to enable'};
+}
 function renderNotificationButton(){
-  const p=permission(),active=settings.enabled&&p==='granted',button=$('notifications');button.classList.toggle('active',active);
-  const icon=p==='denied'||p==='unsupported'?BellOff:p==='granted'?BellRing:Bell;
-  const iconName=p==='denied'||p==='unsupported'?'bell-off':p==='granted'?'bell-ring':'bell';
-  $('notification-icon').replaceChildren(createElement(icon,{'aria-hidden':'true',class:`lucide lucide-${iconName}`,width:20,height:20}));
-  const label=p==='unsupported'?'Notifications unavailable':p==='denied'?'Notifications blocked':active?'Notifications on — click to disable':p==='granted'?'Notifications off — click to enable':'Enable notifications';
-  button.title=label;button.setAttribute('aria-label',label);button.disabled=p==='unsupported';$('test-notification').disabled=!active;
-  button.setAttribute('aria-pressed',String(active));
+  const state=notificationState(permission(),settings.enabled),button=$('notifications'),icons={bell:Bell,'bell-ring':BellRing,'bell-off':BellOff};
+  button.classList.toggle('active',state.active);
+  $('notification-icon').replaceChildren(createElement(icons[state.icon],{'aria-hidden':'true',class:`lucide lucide-${state.icon}`,width:20,height:20}));
+  button.title=state.label;button.setAttribute('aria-label',state.label);button.disabled=state.disabled;
+  $('test-notification').disabled=!state.active;button.setAttribute('aria-pressed',String(state.active));
 }
 async function enableNotifications(){
   if(permission()==='unsupported')return;
   if(permission()==='denied'){notice('Allow notifications in your browser settings, then reload this page.',true);return}
-  if(settings.enabled&&permission()==='granted'){settings.enabled=false;save();renderNotificationButton();return}
-  // Request permission directly in the click handler, before waiting for the SW.
-  const result=await Notification.requestPermission();
-  settings.enabled=result==='granted';save();renderNotificationButton();
-  if(settings.enabled){notice(settings.rules.length?'Notifications enabled for new matching spawns.':'Notifications enabled. Add a filter to receive alerts.');}
-  else notice('Notifications were not allowed. The live feed is still available.',true);
+  if(settings.enabled&&permission()==='granted'){
+    settings.enabled=false;save();renderNotificationButton();notice('Notifications disabled.');
+    return;
+  }
+  return requestNotifications();
+}
+function requestNotifications(){
+  if(permissionRequest)return permissionRequest;
+  // Persist before prompting so a dismissed prompt is not repeated on every load.
+  settings.permissionRequested=true;save();
+  const request=(async()=>{
+    let result;
+    // Called synchronously from the click handler (and from init) so the user activation is still present.
+    try{result=await Notification.requestPermission()}
+    catch{
+      settings.enabled=false;save();renderNotificationButton();
+      notice('Notifications disabled. Click the bell to enable.',true);return;
+    }
+    settings.enabled=result==='granted';save();renderNotificationButton();
+    if(settings.enabled)notice(settings.rules.length?'Notifications enabled for new matching spawns.':'Notifications enabled. Add a filter to receive alerts.');
+    else notice(result==='denied'?'Notifications blocked. Allow them in your browser settings, then reload.':'Notifications disabled. Click the bell to enable.');
+  })();
+  permissionRequest=request;
+  // Clear after this request settles, but never overwrite a newer request. Clearing inside the
+  // async body would run before this assignment when the body settles synchronously.
+  const clear=()=>{if(permissionRequest===request)permissionRequest=null};
+  request.then(clear,clear);
+  return request;
 }
 async function showNotification(title,body,{tag,eventId}={}){
   const options={body,tag,data:{eventId},renotify:false};
@@ -229,5 +285,6 @@ async function init(){
   $('notifications').onclick=enableNotifications;$('test-notification').onclick=()=>void showNotification('Zorr notifier','Desktop notifications are enabled.',{tag:'zorr-notifier-test'});
   document.addEventListener('visibilitychange',renderNotificationButton);
   renderRules();renderFeed();renderNotificationButton();connect();
+  if(!settings.permissionRequested&&permission()==='default')void requestNotifications();
 }
-init().catch(()=>{notice('Unable to load the page. Please reload.',true,{persistent:true});$('empty-feed-title').textContent='Failed to load'});
+if(typeof document!=='undefined')init().catch(()=>{notice('Unable to load the page. Please reload.',true,{persistent:true});$('empty-feed-title').textContent='Failed to load'});

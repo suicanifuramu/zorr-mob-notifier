@@ -20,17 +20,30 @@ personal filter settings.
 Petal rules cover all variants and mob rarities; old saved petal rules are loaded
 without their former variant or rarity restrictions. Matching includes generated
 eggs, Magic/Arcane replacements, variant extras, and the possible Flash candidates.
-It matches **possible drops**, not
-confirmed drops or a player's luck/buffs. Tiny rates are not rounded to zero.
-The data snapshot is 2026-10-21 (`1K580MS96.js`): 179 mobs, 575 petal definitions,
-18 variants. Unknown spawn names are skipped and counted in the authenticated
-status endpoint so a game update cannot silently become a guessed match.
+It matches **possible drops**, not confirmed drops or a player's luck/buffs.
+Tiny rates are not rounded to zero. Opening a spawn's drop list shows one row per
+possible petal, with every rarity variant and its base rate. A petal reached by
+more than one roll shows each rate separately, and Flash-only candidates are
+marked conditional; separate rolls are not combined into one aggregate
+chance. Rates are base rates before personal bonuses. The data snapshot is
+2026-10-21 (`1K580MS96.js`): 179 mobs, 575 petal definitions, 18 variants. Unknown
+spawn names are skipped and counted in the authenticated status endpoint so a
+game update cannot silently become a guessed match.
 
-Enable notifications using the button on the page. The page must remain open;
-closing it stops receipt of events. Initial history and old reconnect events do
-not notify. Notifications are deduplicated across tabs through an atomic
-IndexedDB transaction; in storage-restricted browsers the fallback is per tab.
-The service worker handles notification clicks; it is not a Web Push service.
+On the first visit the page asks for notification permission once. Browsers may
+ignore or auto-dismiss a permission prompt that was not triggered by a click, so
+the bell offers a click-triggered retry; Safari requires that click. The bell
+shows `BellRing` while alerts are on, `Bell` when permission is granted but
+alerts are off, and `BellOff` when the browser has blocked or does not support
+notifications. Turning alerts off replaces the notice immediately. After a
+block, allow notifications in the browser's site settings and reload; the page
+cannot show the native prompt again after a denial.
+
+The page must remain open; closing it stops receipt of events. Initial history
+and old reconnect events do not notify. Notifications are deduplicated across
+tabs through an atomic IndexedDB transaction; in storage-restricted browsers the
+fallback is per tab. The service worker handles notification clicks; it is not a
+Web Push service.
 
 ## Local web development
 
