@@ -1,45 +1,112 @@
 # zorr-mob-notifier
 
-Zorr spawn feed and desktop alerts, with the game's Fredoka One font and
-icons rendered from its original Canvas functions. The web app runs on
-Cloudflare Pages + Pages Functions; the Discord reader runs on this VPS.
+A spawn feed and desktop-alert web app for Zorr. It reads spawn and defeat
+announcements from one Discord channel, serves them through an authenticated
+event API, and filters them in the browser. The frontend runs on Cloudflare
+Pages + Pages Functions; the Discord reader runs on any small always-on host.
+
+This is an unofficial fan project. It is not affiliated with the game's
+developers.
 
 ```
 Discord → main.py + SQLite → nginx/HTTPS → Pages Functions → browser filters → desktop notification
 ```
 
-## Web app
+## Quick start (demo, no Discord account)
 
-Add up to 100 rules for a petal, a mob, or all mobs with a chosen variant.
-Petal rules only select a petal. Mob and variant rules can set the variant and
-minimum mob rarity, which defaults to Omega for new rules. Petal and mob pickers
-show searchable icon grids. Conditions within a rule are AND, rules are OR.
-Rules and notification preferences stay in the browser. The server receives no
-personal filter settings.
+Requirements: Node.js from [.node-version](.node-version) (24.21.0), Python
+3.11 or newer, and [uv](https://docs.astral.sh/uv/).
 
-Petal rules cover all variants and mob rarities; old saved petal rules are loaded
-without their former variant or rarity restrictions. Matching includes generated
-eggs, Magic/Arcane replacements, variant extras, and the possible Flash candidates.
-It matches **possible drops**, not confirmed drops or a player's luck/buffs.
-Drop rates follow the in-game gallery: each roll is rounded to two decimals and
-rows that round to zero are omitted, so the app never shows a rarity the game
-hides. Opening a spawn's drop list shows one row per possible petal, with the
-same rounded rarity variants and base rates the game displays. A petal reached by
-more than one roll shows each rate separately, and Flash-only candidates are
-marked conditional; separate rolls are not combined into one aggregate
-chance. Rates are base rates before personal bonuses. The data snapshot is
-2026-10-21 (`1K580MS96.js`): 179 mobs, 575 petal definitions, 18 variants. Unknown
-spawn names are skipped and counted in the authenticated status endpoint so a
-game update cannot silently become a guessed match.
+```sh
+npm ci
+uv sync --frozen
+cp .env.example .env
 
-On the first visit the page asks for notification permission once. Browsers may
-ignore or auto-dismiss a permission prompt that was not triggered by a click, so
-the bell offers a click-triggered retry; Safari requires that click. The bell
-shows `BellRing` while alerts are on, `Bell` when permission is granted but
-alerts are off, and `BellOff` when the browser has blocked or does not support
-notifications. Turning alerts off replaces the notice immediately. After a
-block, allow notifications in the browser's site settings and reload; the page
-cannot show the native prompt again after a denial.
+# Generate a random API token and put it in API_TOKEN in .env.
+uv run python -c "import secrets; print(secrets.token_urlsafe(48))"
+
+cp .dev.vars.example .dev.vars
+# Put the same value in BOT_API_TOKEN in .dev.vars.
+
+npm run build
+uv run python main.py --demo
+```
+
+In another terminal:
+
+```sh
+npm run dev
+```
+
+Open `http://localhost:4173`. `npm run dev` serves the built `dist/` output
+through Wrangler, so run `npm run build` after frontend changes. The demo
+publishes synthetic spawns every few seconds, uses `var/demo.sqlite3`, and
+never connects to Discord. The page labels this stream as demo data.
+
+`API_TOKEN` is required for `--serve` and `--demo` because those modes expose
+the HTTP API. A plain reader (no `--serve`) does not need it. Use a random value
+generated locally; no example file contains a real token.
+
+## Live Discord reader
+
+Copy `.env.example` to `.env` and fill in:
+
+- `DISCORD_TOKEN`: the user token of the account that can read the channel.
+- `GUILD_ID` and `CHANNEL_ID`: the numeric IDs of the Discord guild and channel.
+- `API_TOKEN`: a random secret, only when you use `--serve` or `--demo`.
+
+```sh
+uv run python main.py                 # last 20 messages, then live stream
+uv run python main.py --limit 500     # reconcile recent deaths (~1.5h of announcements)
+uv run python main.py --no-backfill   # live stream only
+uv run python main.py -v              # debug logs
+uv run python main.py --serve         # live reader plus the authenticated API
+```
+
+The reader validates the token and IDs before connecting to Discord and exits
+with an actionable message when something is missing. Settings are read only
+from `.env` in the project root; real environment variables are ignored. Keep
+`.env` private (`chmod 600 .env`) and never commit it.
+
+The reader uses [discord.py-self](https://github.com/dolfies/discord.py-self)
+with a user account token. Self-bot use can conflict with Discord's Terms of
+Service; review those terms and only operate an account you are authorized to
+use.
+
+For a server install, `deploy/install-vps.sh` creates a systemd service, an
+nginx virtual host with buffering disabled, and a Certbot certificate:
+
+```sh
+bash deploy/install-vps.sh bot.example.com
+sudo systemctl status zorr-mob-notifier.service
+sudo journalctl -u zorr-mob-notifier.service -f
+# After changing Python code or .env:
+sudo systemctl restart zorr-mob-notifier.service
+```
+
+The installed unit runs `--serve --limit 500`, keeps the API on
+`127.0.0.1:8090` behind nginx, and retains Certbot's TLS configuration on
+repeated installer runs. Editing the service template does not update an
+already installed unit; re-run the installer or update `ExecStart` and reload
+systemd. The console reader keeps the smaller default of 20 messages.
+
+## What the page does
+
+Add up to 100 rules for a petal, a mob, or all mobs with a chosen variant. Petal
+rules only select a petal. Mob and variant rules can set the variant and minimum
+mob rarity, which defaults to Omega for new rules. Conditions within a rule are
+AND; rules are OR. Filter settings and notification preferences stay in the
+browser; the server receives no personal filter settings.
+
+Matching includes generated eggs, Magic/Arcane replacements, variant extras,
+and possible Flash candidates. It matches **possible drops**, not confirmed
+drops or a player's luck and buffs. Drop rates follow the in-game gallery: each
+roll is rounded to two decimals and rows that round to zero are omitted, so the
+app never shows a rarity the game hides. Opening a spawn's drop list shows one
+row per possible petal with the game's rounded rates. A petal reached by more
+than one roll shows each rate separately, Flash-only candidates are marked
+conditional, and separate rolls are not combined into one aggregate chance.
+Rates are base rates before personal bonuses.
 
 The page must remain open; closing it stops receipt of events. Initial history
 and old reconnect events do not notify. Notifications are deduplicated across
@@ -56,99 +123,101 @@ preserved. A defeat alert uses the edit time as the death time and its own
 notification key, so a spawn and its later death each alert once. Kills are
 matched only by the exact Discord message ID, never by mob name or timing.
 
-## Local web development
+On the first visit the page asks for notification permission once. Browsers may
+ignore or auto-dismiss a permission prompt that was not triggered by a click, so
+the bell offers a click-triggered retry; Safari requires that click. The bell
+shows `BellRing` while alerts are on, `Bell` when permission is granted but
+alerts are off, and `BellOff` when the browser has blocked or does not support
+notifications. After a denial, allow notifications in the browser's site
+settings and reload; the page cannot show the native prompt again.
 
-```sh
-npm ci
-uv sync --frozen
-# Add a random API_TOKEN to .env, for example with secrets.token_urlsafe(48).
-# Copy the same value into BOT_API_TOKEN in .dev.vars; never commit either file.
-cp .dev.vars.example .dev.vars
-npm run build
-uv run python main.py --serve
-# In another terminal:
-npm run dev
-```
+## Event API
 
-Open `http://localhost:4173`. For an isolated synthetic stream use `--demo`
-instead of `--serve`; it uses `var/demo.sqlite3`, never the production database.
-The browser labels this stream as demo data. Browser notifications require HTTPS
-or localhost and a browser that supports the Notifications API.
-
-## VPS deployment
-
-The production API is `https://zorr-mob-notifier.info.gf`. DNS must point to this
-VPS. `API_TOKEN` is required; the application binds to `127.0.0.1:8090` behind
-nginx. It reads its settings only from the project's `.env` file.
-
-```sh
-bash deploy/install-vps.sh zorr-mob-notifier.info.gf
-sudo systemctl status zorr-mob-notifier.service
-sudo journalctl -u zorr-mob-notifier.service -f
-# After changing Python code or .env:
-sudo systemctl restart zorr-mob-notifier.service
-```
-
-The installer creates a systemd service, an nginx virtual host with buffering
-disabled, and a Certbot certificate with automatic renewal. Repeated runs retain
-Certbot's TLS configuration. Existing virtual hosts are preserved.
-
-The installed unit starts with `--limit 500` so startup history reconciliation
-covers roughly 1.5 hours of announcements at the observed rate; mobs have been
-seen alive for over an hour. Editing the service template does not update an
-already installed unit: re-run the installer or change `ExecStart` in
-`/etc/systemd/system/zorr-mob-notifier.service` and run
-`sudo systemctl daemon-reload && sudo systemctl restart zorr-mob-notifier`.
-The console reader keeps its smaller default (`--limit 20`).
-
-The bot keeps up to 2,000 current spawn records in `var/spawns.sqlite3`. A
-death mutates its spawn record in place; a separate bounded change log (4,000
-revisions) supplies the monotonic delivery cursor, so a death never creates a
-second feed row and its stable ID and key never change. Old databases migrate
+The bot keeps up to 2,000 current spawn records in `var/spawns.sqlite3`. A death
+mutates its spawn record in place; a separate bounded change log (4,000
+revisions) supplies the monotonic delivery cursor. A death never creates a
+second feed row, and its stable ID and key never change. Old databases migrate
 automatically on startup: each existing row becomes its initial `spawn` change
 at the same cursor ID, preserving stable IDs, sparse ID gaps, and client
 cursors. Existing files are never reset.
-`GET /api/stream` supports `Last-Event-ID` / `?after=` for SSE resumption;
-`GET /api/events?after=` offers the same snapshot/delta protocol as JSON.
-Snapshots contain current records (with `type`, `dead`, `sequence`, `killedBy`,
-and `killedAt`); deltas are flat spawn/death change records ordered by change
+
+- `GET /api/stream` supports `Last-Event-ID` and `?after=` for SSE resumption.
+- `GET /api/events?after=` offers the same snapshot/delta protocol as JSON.
+- `GET /api/status` reports Discord connectivity, parser failures, and the last
+  spawn/death times.
+- `GET /healthz` is a public liveness endpoint.
+
+All three `/api/*` endpoints require `Authorization: Bearer <API_TOKEN>`.
+Snapshots contain current records (`type`, `dead`, `sequence`, `killedBy`,
+`killedAt`); deltas are flat spawn/death change records ordered by change
 cursor. An expired cursor produces a silent snapshot with `reset: true`.
-Browsers use SSE first, then automatically fall back to five-second polling if
-a proxy buffers the stream or heartbeats stop. Both paths filter locally and
-deduplicate notifications using the same cursor, stable keys, and event types.
-`GET /api/status` reports Discord connectivity, parser failures, and the last
-spawn/death times. All three require `Authorization: Bearer <API_TOKEN>`.
-`/healthz` is a public liveness endpoint.
+Browsers use SSE first, then fall back to five-second polling if a proxy buffers
+the stream or heartbeats stop. Both paths filter locally and deduplicate
+notifications using the same cursor, stable keys, and event types.
+
 The API publishes spawn/death metadata and links, not arbitrary channel
-messages, author details, or Discord credentials.
+messages, author details, or Discord credentials. Keep `DISCORD_TOKEN` and
+`API_TOKEN` on the server. The Pages Function adds the API bearer token
+server-side, so it is never sent to the browser.
 
-## Cloudflare Pages — GitHub integration
+## Cloudflare Pages
 
-Connect `suicanifuramu/zorr-mob-notifier`, production branch `main`, with:
+Connect your fork of this repository to Pages with:
 
 | Setting | Value |
 | --- | --- |
+| Production branch | `main` |
 | Build command | `npm run build` |
-| Build output | `dist` |
+| Build output directory | `dist` |
 | Root directory | `/` |
-| Node version | `.node-version` (`24.21.0`) |
-| `BOT_API_URL` | `https://zorr-mob-notifier.info.gf` |
-| `BOT_API_TOKEN` | Same secret as VPS `API_TOKEN` |
+| Node version | `.node-version` (24.21.0) |
 
-Set `BOT_API_TOKEN` as an encrypted secret for production and preview Functions;
-keep Discord's token on the VPS. The Functions proxy supplies the API bearer
-token, so it is never sent to the browser. Subsequent pushes to `main` trigger
-Cloudflare builds automatically. The frontend build only reads prepared data and
-images; it does not need Discord, the research repositories, or game servers.
+Set these environment variables on the Pages project for both production and
+preview deployments:
 
-The helper `uv run python scripts/cloudflare-project.py --account ACCOUNT_ID
-create` creates this Git-integrated project through the Cloudflare API after
-`npx wrangler login --device`. It reads Wrangler's OAuth credentials and the bot
-API secret from private files, without printing them. Use `inspect` or `status`
-for the configured source and deployments. It refuses to replace an unrelated
-or Direct Upload project.
+| Variable | Value | Type |
+| --- | --- | --- |
+| `BOT_API_URL` | Public origin of your bot, for example `https://bot.example.com` | encrypted secret (`secret_text`) |
+| `BOT_API_TOKEN` | Same secret as the reader's `API_TOKEN` | encrypted secret (`secret_text`) |
 
-## Validation and game data refresh
+In the Pages dashboard, choose **Encrypt** for both variables in both
+production and preview. `BOT_API_URL` is not a credential, but it is stored as a
+secret binding on purpose: Cloudflare treats the tracked `wrangler.toml` as the
+source of truth for plaintext variables, and a `[vars]` block would overwrite the
+deployment-specific URL on the next deploy. Keeping the URL as a secret keeps it
+out of `wrangler.toml` and out of this repository.
+
+`BOT_API_URL` must be HTTPS. Plain HTTP is accepted only for loopback hosts
+(`127.0.0.1`, `localhost`, `::1`) during local development. No production bot
+URL is committed to `wrangler.toml`; each fork sets its own. Keep
+`BOT_API_TOKEN` server-side and separate from the browser build.
+
+The helper can create or inspect the Pages project through the Cloudflare API
+after `npx wrangler login --device`:
+
+```sh
+uv run python scripts/cloudflare-project.py --account ACCOUNT_ID \
+  --repo OWNER/REPO --bot-api-url https://bot.example.com create
+
+uv run python scripts/cloudflare-project.py --account ACCOUNT_ID status
+uv run python scripts/cloudflare-project.py --account ACCOUNT_ID inspect
+```
+
+`--project` defaults to `zorr-mob-notifier`; use `--project YOUR_NAME` for a
+fork. `--repo OWNER/REPO` is required for `create`; pass your fork's owner and
+name. `create` reads the API secret from the local `.env` and never prints or
+accepts secrets in argv. It creates both Pages variables as encrypted secret
+bindings for production and preview, and refuses to replace a project connected
+to a different repository or a Direct Upload project. `status`, `inspect`,
+`retry`, and `logs` work against an existing project. Changing environment
+variables in the Pages dashboard does not require changing this repository;
+verify them before relying on a deployment.
+
+Subsequent pushes to `main` trigger Cloudflare builds automatically. The
+frontend build only reads prepared data and images; it does not need Discord,
+the research snapshot, or game servers.
+
+## Validation
 
 ```sh
 npm test
@@ -156,74 +225,84 @@ npm run test:python
 npm run build
 ```
 
-The tests cover the real spawn and defeat announcement forms, all current mob
-names, crafted/unknown exclusion, exact-message death correlation, killer
+The Python tests cover the real spawn and defeat announcement forms, all current
+mob names, crafted/unknown exclusion, exact-message death correlation, killer
 parsing, persistent deduplication without resurrection, old-schema migration,
-retention/cursor resets, and SSE history/replay/reset. They also cover
-authenticated proxy behavior and petal/mob/variant filter semantics.
+retention and cursor resets, SSE history/replay/reset, and live-configuration
+validation. The JavaScript tests cover authenticated proxy behavior and
+petal/mob/variant filter semantics, notification state, and asset frame
+resolution.
 
-Prepared data is in `data/`, images and the font in `public/assets/`. To regenerate
-them from the audited local research outputs, run `npm run assets`. This manual
-step uses Chromium and the original Canvas functions; it does not connect to
-the game server. Review and re-extract a new game version before refreshing.
-The browser receives only image atlases and the compact catalog, not the game
-runtime. Asset filenames are content-hashed by the normal build.
+## Data and asset refresh
 
-Game artwork, data, and font retain their respective licenses. The original
-Fredoka One SIL Open Font License is included in `public/licenses/` and served
-at `/licenses/Fredoka-One-OFL.txt`. Notification icons use
-[Lucide](https://lucide.dev/); its license is served at
-`/licenses/Lucide.txt`. The upstream
-[zorr-assembler](https://github.com/suicanifuramu/zorr-assembler) is MIT licensed;
-its game's generated assets are excluded from that license. Platform references:
+Prepared data is in `data/`; images and the font are in `public/assets/`. Normal
+builds, tests, and deployments consume these files and do not need the research
+snapshot.
+
+`npm run assets` is a separate manual refresh. It requires the ignored local
+`research/` inputs used for the audited snapshot:
+
+- `research/extracted-game.json`
+- `research/mob-drops.json`
+- `research/variant-drops.json`
+- `research/extracted-runtime.js`
+- `research/zorr-deobfuscator/deobfuscated/1K580MS96-deobfuscated.js`, produced
+  from the source snapshot recorded in `data/assets-source.json`
+
+It also needs Chromium through `@sparticuz/chromium` and the original Canvas
+painting functions. These research files are not included in a clean clone, so
+the asset refresh is not reproducible from this repository alone. The script
+fails instead of falling back to guessed data; review and re-extract a new game
+version before refreshing.
+
+The committed snapshot is from 2026-10-21 and records its source script,
+SHA-256, and font hash in `data/assets-source.json`: 179 mobs, 575 petal
+definitions, and 18 variants. Unknown spawn names are skipped and counted in
+the authenticated status endpoint so a game update cannot silently become a
+guessed match. The browser receives only image atlases and the compact catalog,
+not the game runtime. Asset filenames are content-hashed by the normal build.
+
+## Licenses and third-party material
+
+The original source code in this repository is MIT licensed; see
+[LICENSE](LICENSE). Third-party notices are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and are served under
+`/licenses/`.
+
+- Fredoka One is licensed under the SIL Open Font License 1.1
+  (`public/licenses/Fredoka-One-OFL.txt`).
+- Lucide icons are ISC licensed (`public/licenses/Lucide.txt`).
+- The GitHub mark comes from Primer Octicons, MIT licensed
+  (`public/licenses/Octicons.txt`).
+- Parts of the markup and Canvas painting approach are adapted from
+  [zorr-assembler](https://github.com/suicanifuramu/zorr-assembler), MIT
+  licensed.
+
+Game artwork and catalog data are derived from the game client and are not
+covered by the MIT license. Their snapshot provenance is recorded in
+`data/assets-source.json`, and no additional license is granted for them here.
+Rights remain with the respective game rights holders. Review the applicable
+terms before redistributing those files or deploying this project publicly.
+
+Platform references:
 [Pages Git integration](https://developers.cloudflare.com/pages/configuration/git-integration/),
 [Functions bindings](https://developers.cloudflare.com/pages/functions/bindings/),
 [browser notifications](https://developer.mozilla.org/en-US/docs/Web/API/ServiceWorkerRegistration/showNotification).
 
-## Original console reader
+## Environment variables
 
-Reads messages from Discord channel `1541811459913416764` (guild `1331301490538840144`)
-through a **user account** using [discord.py-self](https://github.com/dolfies/discord.py-self).
+Settings in `.env` are read only from that file; real environment variables are
+ignored. Pages variables are read by the Functions runtime from the Cloudflare
+project environment.
 
-> Self-bot: this uses your own user token and violates Discord's Terms of Service.
-> Use a throwaway account that is already a member of the guild.
-
-## Setup
-
-```bash
-uv sync
-cp .env.example .env
-# then edit .env and set DISCORD_TOKEN=...
-chmod 600 .env
-```
-
-Get the token from the browser DevTools: open Discord in the web client, look at
-a request to `/api/v9/...`, and copy the `authorization` header value.
-Never commit it, never share it (`.env` is gitignored).
-
-## Run
-
-```bash
-uv run python main.py                 # last 20 messages, then live stream
-uv run python main.py --limit 500     # reconcile recent deaths (~1.5h of announcements)
-uv run python main.py --no-backfill   # live stream only
-uv run python main.py -v              # debug logs
-```
-
-Each line is printed as:
-
-```
-[2026-10-21 15:04:12] username (123456789012345678): hello
-```
-
-Attachments, embeds and stickers are noted in `[...]` after the text.
-
-## Env vars
-
-Read **only** from `.env` in the project root. Real environment variables are ignored.
-
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `DISCORD_TOKEN` | – | user token (required) |
-| `GUILD_ID` | `1331301490538840144` | guild to filter on |
-| `CHANNEL_ID` | `1541811459913416764` | channel to read |
+| Variable | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `DISCORD_TOKEN` | live reader | – | Discord user token |
+| `GUILD_ID` | live reader | – | guild to filter on |
+| `CHANNEL_ID` | live reader | – | channel to read |
+| `API_TOKEN` | `--serve`, `--demo` | – | bearer token for the event API |
+| `BOT_HOST` | no | `127.0.0.1` | API bind address |
+| `BOT_PORT` | no | `8090` | API bind port |
+| `DATABASE_PATH` | no | `var/spawns.sqlite3` | SQLite database path |
+| `BOT_API_URL` | Pages | – | public bot origin used by Functions (encrypted secret binding) |
+| `BOT_API_TOKEN` | Pages | – | API bearer token used by Functions (encrypted secret binding) |

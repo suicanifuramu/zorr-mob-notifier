@@ -1,4 +1,4 @@
-import {readFile,writeFile,mkdir,rm,copyFile} from 'node:fs/promises';
+import {readFile,writeFile,mkdir,rm,copyFile,readdir} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {build} from 'esbuild';
 const root=new URL('../',import.meta.url),dist=new URL('dist/',root),assets=new URL('assets/',dist);
@@ -17,7 +17,8 @@ const css=await put('style','css',(await readFile(new URL('src/style.css',root),
 const html=(await readFile(new URL('src/index.html',root),'utf8')).replace('__STYLE_URL__',css).replace('__APP_URL__',app);
 await writeFile(new URL('index.html',dist),html);
 for(const file of ['sw.js','_headers','_routes.json'])await copyFile(new URL(`public/${file}`,root),new URL(file,dist));
-await mkdir(new URL('licenses/',dist),{recursive:true});
-await copyFile(new URL('public/licenses/Fredoka-One-OFL.txt',root),new URL('licenses/Fredoka-One-OFL.txt',dist));
-await copyFile(new URL('node_modules/lucide/LICENSE',root),new URL('licenses/Lucide.txt',dist));
+const licenses=new URL('licenses/',dist);await mkdir(licenses,{recursive:true});
+for(const file of await readdir(new URL('public/licenses/',root)))
+  await copyFile(new URL(`public/licenses/${file}`,root),new URL(file,licenses));
+await copyFile(new URL('THIRD_PARTY_NOTICES.md',root),new URL('THIRD_PARTY_NOTICES.md',licenses));
 console.log(`Built ${catalog.mobs.length} mobs / ${catalog.petals.length} petals → dist/`);

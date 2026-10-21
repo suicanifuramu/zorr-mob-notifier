@@ -1,6 +1,6 @@
+# BOT_API_URL and BOT_API_TOKEN are encrypted Pages secrets, not plaintext
+# vars: a [vars] block here would overwrite the deployment-specific URL. See
+# README.md and .dev.vars.example.
 name = "zorr-mob-notifier"
 pages_build_output_dir = "./dist"
 compatibility_date = "2026-10-18"
-
-[vars]
-BOT_API_URL = "https://zorr-mob-notifier.info.gf"

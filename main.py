@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import re
 import sys
 from contextlib import suppress
 from datetime import datetime, timezone
@@ -23,21 +24,74 @@ from notifier.store import EventStore
 ENV_FILE = Path(__file__).resolve().parent / ".env"
 _env = dotenv_values(ENV_FILE)
 
-GUILD_ID = int(_env.get("GUILD_ID") or "1331301490538840144")
-CHANNEL_ID = int(_env.get("CHANNEL_ID") or "1541811459913416764")
+
+class ConfigError(Exception):
+    """Missing or malformed local settings."""
+
+
+_ASCII_DECIMAL = re.compile(r"[0-9]+")
+
+
+def _parse_id(raw) -> int | None:
+    """Return a positive ASCII-decimal ID, or None when the value is malformed.
+
+    str.isdigit() accepts characters such as Unicode superscripts that int()
+    rejects, so match ASCII digits explicitly and never let int() raise here.
+    """
+    text = str(raw or "").strip()
+    if not _ASCII_DECIMAL.fullmatch(text):
+        return None
+    try:
+        value = int(text)
+    except ValueError:  # Extremely long digit strings exceed int()'s limit.
+        return None
+    return value if value > 0 else None
+
+
+def _settings_int(name: str) -> int:
+    """Read an optional numeric setting for module defaults and tests."""
+    return _parse_id(_env.get(name)) or 0
+
+
+GUILD_ID = _settings_int("GUILD_ID")
+CHANNEL_ID = _settings_int("CHANNEL_ID")
 
 log = logging.getLogger("zorr-mob-notifier")
 
 
-def load_token() -> str:
-    token = (_env.get("DISCORD_TOKEN") or "").strip().strip("'\"")
-    if token:
-        return token
+def resolve_live_config(values) -> tuple[str, int, int]:
+    """Validate the settings required to connect to Discord.
 
-    sys.exit(
-        f"DISCORD_TOKEN is not set in {ENV_FILE}. Copy .env.example to .env and "
-        "put your user token in it: DISCORD_TOKEN=..."
-    )
+    Takes a mapping instead of reading the module-level .env snapshot so unit
+    tests can run without a .env file or real Discord IDs.
+    """
+    token = str(values.get("DISCORD_TOKEN") or "").strip().strip("'\"")
+    if not token:
+        raise ConfigError(
+            f"DISCORD_TOKEN is not set in {ENV_FILE}. Copy .env.example to .env and "
+            "fill in the user token for the account that can read the channel."
+        )
+    ids: list[int] = []
+    for name in ("GUILD_ID", "CHANNEL_ID"):
+        value = _parse_id(values.get(name))
+        if value is None:
+            raise ConfigError(
+                f"{name} must be set to a positive numeric Discord ID in {ENV_FILE}. "
+                "Copy .env.example to .env and fill in GUILD_ID and CHANNEL_ID."
+            )
+        ids.append(value)
+    return token, ids[0], ids[1]
+
+
+def require_api_token(values) -> str:
+    """Validate API_TOKEN for the modes that expose the HTTP API."""
+    token = str(values.get("API_TOKEN") or "").strip().strip("'\"")
+    if not token:
+        raise ConfigError(
+            f"API_TOKEN is not set in {ENV_FILE}. It is required for --serve and --demo. "
+            'Generate one with: uv run python -c "import secrets; print(secrets.token_urlsafe(48))"'
+        )
+    return token
 
 
 def format_embed(embed: discord.Embed) -> str:
@@ -76,10 +130,15 @@ def format_message(message: discord.Message) -> str:
 
 
 class ChannelReader(discord.Client):
-    def __init__(self, *, limit: int, backfill: bool, service: SpawnService | None = None) -> None:
+    def __init__(
+        self, *, limit: int, backfill: bool, service: SpawnService | None = None,
+        guild_id: int = GUILD_ID, channel_id: int = CHANNEL_ID,
+    ) -> None:
         super().__init__()
         self.limit = limit
         self.backfill = backfill
+        self.guild_id = guild_id
+        self.channel_id = channel_id
         self._channel: discord.abc.Messageable | None = None
         self._history_done = False
         self.service = service
@@ -92,27 +151,28 @@ class ChannelReader(discord.Client):
             # Reconnect: channel is already resolved, do not replay history.
             return
 
-        channel = self.get_channel(CHANNEL_ID)
+        channel = self.get_channel(self.channel_id)
         if channel is None:
             try:
-                channel = await self.fetch_channel(CHANNEL_ID)
+                channel = await self.fetch_channel(self.channel_id)
             except discord.NotFound:
-                log.error("Channel %s not found or not visible.", CHANNEL_ID)
+                log.error("Channel %s not found or not visible.", self.channel_id)
                 await self.close()
                 return
             except discord.Forbidden:
-                log.error("No access to channel %s.", CHANNEL_ID)
+                log.error("No access to channel %s.", self.channel_id)
                 await self.close()
                 return
 
         self._channel = channel
         guild = getattr(channel, "guild", None)
-        if guild is not None and guild.id != GUILD_ID:
+        if guild is not None and guild.id != self.guild_id:
             log.warning(
-                "Channel %s belongs to guild %s, not %s.", CHANNEL_ID, guild.id, GUILD_ID
+                "Channel %s belongs to guild %s, not %s.",
+                self.channel_id, guild.id, self.guild_id,
             )
         log.info(
-            "Watching #%s in %s", getattr(channel, "name", CHANNEL_ID), guild or "DM"
+            "Watching #%s in %s", getattr(channel, "name", self.channel_id), guild or "DM"
         )
 
         if self.backfill and not self._history_done:
@@ -136,9 +196,9 @@ class ChannelReader(discord.Client):
 
     async def on_message(self, message: discord.Message) -> None:
         guild = getattr(message, "guild", None)
-        if guild is None or guild.id != GUILD_ID:
+        if guild is None or guild.id != self.guild_id:
             return
-        if message.channel.id != CHANNEL_ID:
+        if message.channel.id != self.channel_id:
             return
 
         print(format_message(message), flush=True)
@@ -149,7 +209,7 @@ class ChannelReader(discord.Client):
         # Some announcements arrive before their embed is populated. Cached
         # messages (including the in-place "Mob Defeated!" edit) arrive here;
         # uncached edits are handled by on_raw_message_edit.
-        if self.service and getattr(after.guild, "id", None) == GUILD_ID and after.channel.id == CHANNEL_ID:
+        if self.service and getattr(after.guild, "id", None) == self.guild_id and after.channel.id == self.channel_id:
             changes = self.service.ingest(after)
             if changes and any(change.get("type") == "death" for change in changes):
                 log.info("Recorded death for message %s", after.id)
@@ -159,18 +219,18 @@ class ChannelReader(discord.Client):
         # predate the gateway session, so history() cannot populate the cache.
         # Fetch the configured channel's current revision instead of trusting
         # the possibly partial gateway payload.
-        if not self.service or payload.channel_id != CHANNEL_ID:
+        if not self.service or payload.channel_id != self.channel_id:
             return
-        if payload.guild_id is not None and payload.guild_id != GUILD_ID:
+        if payload.guild_id is not None and payload.guild_id != self.guild_id:
             return
         if getattr(payload, "cached_message", None) is not None:
             return  # on_message_edit already handles cached messages
-        channel = self._channel or self.get_channel(CHANNEL_ID)
+        channel = self._channel or self.get_channel(self.channel_id)
         if channel is None:
             try:
-                channel = await self.fetch_channel(CHANNEL_ID)
+                channel = await self.fetch_channel(self.channel_id)
             except (discord.NotFound, discord.Forbidden, discord.HTTPException) as exc:
-                log.warning("Cannot fetch channel %s for an edited message: %s", CHANNEL_ID, exc)
+                log.warning("Cannot fetch channel %s for an edited message: %s", self.channel_id, exc)
                 return
             self._channel = channel
         try:
@@ -181,8 +241,9 @@ class ChannelReader(discord.Client):
         except discord.HTTPException as exc:
             log.warning("Discord rejected the edited message fetch for %s: %s", payload.message_id, exc)
             return
-        if getattr(getattr(message, "channel", None), "id", None) != CHANNEL_ID:
+        if getattr(getattr(message, "channel", None), "id", None) != self.channel_id:
             return
+
         changes = self.service.ingest(message)
         if changes:
             log.info("Recorded %s update for message %s", changes[-1].get("type", "spawn"), message.id)
@@ -208,25 +269,36 @@ def parse_args() -> argparse.Namespace:
         "--no-backfill", action="store_true", help="skip the history dump on start"
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="debug logging")
-    parser.add_argument("--serve", action="store_true", help="serve authenticated spawn API on BOT_HOST:BOT_PORT")
-    parser.add_argument("--demo", action="store_true", help="serve a separate synthetic demo feed without Discord")
+    parser.add_argument(
+        "--serve", action="store_true",
+        help="serve authenticated spawn API on BOT_HOST:BOT_PORT (requires API_TOKEN)",
+    )
+    parser.add_argument(
+        "--demo", action="store_true",
+        help="serve a separate synthetic demo feed without Discord (requires API_TOKEN)",
+    )
     return parser.parse_args()
 
 
 async def run(args: argparse.Namespace) -> None:
+    # Validate everything before connecting to Discord or starting a listener so
+    # a missing setting fails immediately with an actionable message.
+    live = None if args.demo else resolve_live_config(_env)
+    api_token = require_api_token(_env) if (args.serve or args.demo) else None
     service = None
     runner = None
     demo_task = None
     if args.serve or args.demo:
         database = "var/demo.sqlite3" if args.demo else (_env.get("DATABASE_PATH") or "var/spawns.sqlite3")
         service = SpawnService(EventStore(ENV_FILE.parent / database), demo=args.demo)
-        app = create_app(service, (_env.get("API_TOKEN") or "").strip())
+        app = create_app(service, api_token)
         runner = web.AppRunner(app, access_log=None, shutdown_timeout=2)
         await runner.setup()
         host = _env.get("BOT_HOST") or "127.0.0.1"
         port = int(_env.get("BOT_PORT") or "8090")
         await web.TCPSite(runner, host, port).start()
         log.info("Spawn API listening at http://%s:%s", host, port)
+
     client = None
     try:
         if args.demo:
@@ -244,8 +316,11 @@ async def run(args: argparse.Namespace) -> None:
             demo_task = asyncio.create_task(demo())
             await demo_task
         else:
-            client = ChannelReader(limit=max(1, min(args.limit, 1000)), backfill=not args.no_backfill, service=service)
-            await client.start(load_token())
+            client = ChannelReader(
+                limit=max(1, min(args.limit, 1000)), backfill=not args.no_backfill,
+                service=service, guild_id=live[1], channel_id=live[2],
+            )
+            await client.start(live[0])
     finally:
         if demo_task:
             demo_task.cancel()
@@ -271,6 +346,9 @@ def main() -> None:
 
     try:
         asyncio.run(run(args))
+    except ConfigError as error:
+        print(f"Configuration error: {error}", file=sys.stderr)
+        raise SystemExit(1)
     except KeyboardInterrupt:
         pass
 

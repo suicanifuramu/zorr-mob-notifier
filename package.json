@@ -1,7 +1,13 @@
 {
   "name": "zorr-mob-notifier",
   "version": "1.0.0",
+  "description": "Zorr spawn feed with browser filters, desktop alerts, and an authenticated event API",
+  "license": "MIT",
   "private": true,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/suicanifuramu/zorr-mob-notifier.git"
+  },
   "type": "module",
   "engines": {
     "node": ">=24.11.0 <25"

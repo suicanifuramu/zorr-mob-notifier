@@ -1,0 +1,9 @@
+# Local Pages Functions proxy settings. Copy this file to .dev.vars; never
+# commit it.
+#
+# The default points at a local `main.py --serve` or `--demo` instance.
+BOT_API_URL=http://127.0.0.1:8090
+
+# Must match API_TOKEN in .env. Generate a random value instead of committing
+# a real token; see .env.example.
+BOT_API_TOKEN=

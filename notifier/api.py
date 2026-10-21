@@ -111,7 +111,7 @@ def history_payload(service: SpawnService, after: int) -> dict:
 
 def create_app(service: SpawnService, token: str, *, heartbeat: float = 15) -> web.Application:
     if not token:
-        raise ValueError("API_TOKEN is required for --serve")
+        raise ValueError("API_TOKEN is required for --serve and --demo")
 
     @web.middleware
     async def authenticate(request, handler):
