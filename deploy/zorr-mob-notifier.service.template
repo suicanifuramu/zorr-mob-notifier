@@ -1,0 +1,21 @@
+[Unit]
+Description=Zorr Mob Notifier Discord reader and event API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+WorkingDirectory=__PROJECT__
+ExecStart=__PROJECT__/.venv/bin/python -u __PROJECT__/main.py --serve --limit 100
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGINT
+TimeoutStopSec=10
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

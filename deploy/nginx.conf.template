@@ -1,0 +1,27 @@
+# Zorr Mob Notifier bot API. The Pages Function supplies the bearer token.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __DOMAIN__;
+
+    location = /healthz {
+        proxy_pass http://127.0.0.1:8090;
+    }
+    location /api/ {
+        proxy_pass http://127.0.0.1:8090;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        gzip off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+    location / {
+        default_type application/json;
+        return 200 '{"service":"zorr-mob-notifier","role":"bot-api"}';
+    }
+}

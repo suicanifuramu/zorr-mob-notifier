@@ -1,0 +1,13 @@
+[project]
+name = "zorr-mob-notifier"
+version = "0.1.0"
+description = "Discord spawn reader and authenticated event API for Zorr Mob Notifier"
+requires-python = ">=3.11"
+dependencies = [
+    "discord.py-self>=2.0.0",
+    "python-dotenv>=1.2.4",
+    "aiohttp>=3.14.5",
+]
+
+[tool.uv]
+package = false

@@ -1,0 +1,10 @@
+{
+  "source": {
+    "script": "https://zorr.pages.dev/1K580MS96.js",
+    "sha256": "031868d80573bcd36d25a9f63c9abab866ee373ade15e192d70e5e2ad9b5039d",
+    "snapshotDate": "2026-10-21"
+  },
+  "renderer": "Chromium",
+  "fontURL": "https://fonts.gstatic.com/l/font?kit=k3kUo8kEI-tA1RRcTZGmTmHBG8et0C3d1om8PD-vl6dLRdr8zEF7wwNZGX3Sbf5qHFIrhRxxlSxWSuHOEdEKkDgczF1Pi8964wmKuX3fc3Veuqgg_Zf7vdFzObYpDXau0OcjVHr1l6MvTym6fHOMtiVEZhfwt04Ckw&skey=fac42792a60c2aba&v=v15",
+  "fontSha256": "209eadb0a6711cf8ae7431912455edc3d02e893efaa4fe81ce2dd3752e978d17"
+}
