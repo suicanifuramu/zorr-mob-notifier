@@ -18,8 +18,8 @@
 
 .spawn.dead .spawn-name{color:#a8bcae;text-decoration:line-through;text-decoration-thickness:2px;text-decoration-color:#ff5b6e}
 .spawn.dead .sprite img{opacity:.85}
-.death-mark{position:absolute;inset:0;z-index:1;pointer-events:none}
-.death-mark:before,.death-mark:after{content:"";position:absolute;inset:0;margin:auto;width:84%;height:6px;border-radius:3px;background:#ff4f64;box-shadow:0 0 6px #000d,0 1px 0 #0009;transform:rotate(45deg)}
+.death-mark{position:absolute;inset:0;z-index:1;pointer-events:none;filter:drop-shadow(0 0 6px #000d) drop-shadow(0 1px 0 #0009)}
+.death-mark:before,.death-mark:after{content:"";position:absolute;inset:0;margin:auto;width:84%;height:6px;border-radius:3px;background:#ff4f64;transform:rotate(45deg)}
 .death-mark:after{transform:rotate(-45deg)}
 .spawn-status{margin-top:5px;color:#e7a0a0;font-size:12px;overflow-wrap:anywhere}
 @media(max-width:520px){.death-mark:before,.death-mark:after{height:5px}}
