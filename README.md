@@ -11,13 +11,16 @@ Discord → main.py + SQLite → nginx/HTTPS → Pages Functions → browser fil
 ## Web app
 
 Add up to 100 rules for a petal, a mob, or all mobs with a chosen variant.
-Each rule can set the minimum mob rarity; petal rules can also set the minimum
-possible dropped petal rarity. Conditions within a rule are AND, rules are OR.
+Petal rules only select a petal. Mob and variant rules can set the variant and
+minimum mob rarity, which defaults to Omega for new rules. Petal and mob pickers
+show searchable icon grids. Conditions within a rule are AND, rules are OR.
 Rules and notification preferences stay in the browser. The server receives no
 personal filter settings.
 
-Petal matching includes generated eggs, Magic/Arcane replacements, variant
-extras, and the possible Flash candidates. It matches **possible drops**, not
+Petal rules cover all variants and mob rarities; old saved petal rules are loaded
+without their former variant or rarity restrictions. Matching includes generated
+eggs, Magic/Arcane replacements, variant extras, and the possible Flash candidates.
+It matches **possible drops**, not
 confirmed drops or a player's luck/buffs. Tiny rates are not rounded to zero.
 The data snapshot is 2026-10-21 (`1K580MS96.js`): 179 mobs, 575 petal definitions,
 18 variants. Unknown spawn names are skipped and counted in the authenticated

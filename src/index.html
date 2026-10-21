@@ -5,43 +5,40 @@
   <meta name="theme-color" content="#121916">
   <meta name="description" content="Zorrのモブ出現をリアルタイムで受信し、ペタル・モブ・variantの条件に合わせてデスクトップへ通知。">
   <title>Zorr Mob Notifier</title>
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
   <link rel="stylesheet" href="__STYLE_URL__">
   <script type="module" src="__APP_URL__"></script>
 </head>
 <body>
   <header class="topbar">
-    <a class="brand" href="/" aria-label="Zorr Mob Notifier"><img src="/favicon.svg" width="34" height="34" alt=""><h1>Zorr notifier</h1></a>
+    <a class="brand" href="/" aria-label="Zorr Mob Notifier"><h1>Zorr notifier</h1></a>
     <button id="notifications" class="notification-button" type="button"><span aria-hidden="true">♧</span><span id="notification-label">通知を有効に</span></button>
   </header>
   <div class="connection-line"><span id="connection" class="connection" role="status"><i></i><span>Connecting…</span></span><span id="last-update" class="muted"></span></div>
-  <p class="intro">欲しいペタル、探しているモブ。<br class="mobile-break">出現したらデスクトップにお知らせ。</p>
   <p id="notice" class="notice" role="status" hidden></p>
   <main>
     <section id="alerts" class="alerts" aria-labelledby="alerts-title">
       <div class="section-heading"><h2 id="alerts-title">通知条件 <span id="rule-count" class="count">0</span></h2><button id="add-rule" type="button" class="small-button">＋ 条件を追加</button></div>
       <div id="rules"></div>
-      <p id="rule-empty" class="empty-rules">ペタル・モブ・variantを選んで、最初の通知条件を追加してください。</p>
-      <p class="help">条件内はすべて一致、条件どうしはいずれか一致で通知。設定はこのブラウザに保存されます。</p>
+      <p id="rule-empty" class="empty-rules">条件なし</p>
     </section>
     <section class="feed" aria-labelledby="feed-title">
       <div class="section-heading"><h2 id="feed-title">Live spawns <span id="feed-count" class="count">0</span></h2><label class="filter-toggle"><input id="only-matches" type="checkbox">一致のみ</label></div>
       <div id="feed" aria-label="モブ出現ログ"></div>
-      <div id="feed-empty" class="empty-feed"><div class="empty-flower" aria-hidden="true">✿</div><p id="empty-feed-title">出現ログに接続しています</p><p id="empty-feed-description" class="muted">新しいモブが出現すると、ここに表示されます。</p></div>
+      <div id="feed-empty" class="empty-feed"><p id="empty-feed-title">出現ログに接続しています</p></div>
     </section>
   </main>
-  <footer><p>ページを開いている間に通知します。スリープ中などは受信が止まる場合があります。</p><p>ペタル条件はドロップ候補で照合します。ドロップ確定の通知ではありません。</p><div><button id="test-notification" type="button" class="text-button">通知をテスト</button><a href="https://zorr.pro/" target="_blank" rel="noopener noreferrer">Zorr ↗</a><span id="source-date"></span></div></footer>
+  <footer><button id="test-notification" type="button" class="text-button">通知をテスト</button><a href="https://zorr.pro/" target="_blank" rel="noopener noreferrer">Zorr ↗</a></footer>
   <dialog id="rule-dialog" aria-labelledby="rule-title">
     <form id="rule-form">
       <div class="dialog-heading"><h2 id="rule-title">通知条件を追加</h2><button class="icon-button" id="close-rule" type="button" aria-label="閉じる">×</button></div>
-      <div class="field-row"><label>対象<select id="rule-kind"><option value="petal">Petal</option><option value="mob">Mob</option><option value="any">Variant / すべてのモブ</option></select></label><label id="target-field" class="grow">名前<input id="rule-target" list="target-options" placeholder="名前を入力して検索" autocomplete="off" maxlength="80"><datalist id="target-options"></datalist></label><span id="rule-preview" class="preview-icon"></span></div>
-      <div class="field-row"><label class="grow">Variant<select id="rule-variant"></select></label><label class="grow">Mob rarity ≥<select id="rule-mob-min"></select></label><label class="grow" id="drop-field">Petal rarity ≥<select id="rule-drop-min"></select></label></div>
-      <p id="rule-description" class="help"></p>
+      <div class="field-row"><label class="grow">Filter<select id="rule-kind"><option value="petal">Petal Filter</option><option value="mob">Mob Filter</option><option value="any">Variant Filter</option></select></label></div>
+      <div id="target-picker" class="target-picker"><label for="rule-target">検索</label><input id="rule-target" type="search" placeholder="名前で検索" autocomplete="off" maxlength="80" aria-controls="target-grid"><div id="target-grid" class="target-grid" role="group" aria-label="ペタル"></div><p id="target-empty" class="target-empty" role="status" hidden>一致する候補がありません</p></div>
+      <div id="rule-options" class="field-row"><label class="grow">Variant<select id="rule-variant"></select></label><label class="grow">Mob rarity ≥<select id="rule-mob-min"></select></label></div>
       <p id="rule-error" class="form-error" role="alert" hidden></p>
       <div class="dialog-actions"><button id="cancel-rule" type="button" class="small-button">キャンセル</button><button type="submit" class="primary-button">保存</button></div>
     </form>
   </dialog>
-  <dialog id="drops-dialog" aria-labelledby="drops-title"><div class="dialog-heading"><h2 id="drops-title">ドロップ候補</h2><button id="close-drops" class="icon-button" type="button" aria-label="閉じる">×</button></div><p id="drops-name"></p><div id="drop-grid" class="drop-grid"></div><p class="help">ゲームのクライアント定義から抽出した候補です。実際のドロップは確定しません。Flashの追加候補はランダムです。</p></dialog>
+  <dialog id="drops-dialog" aria-labelledby="drops-title"><div class="dialog-heading"><h2 id="drops-title">ドロップ候補</h2><button id="close-drops" class="icon-button" type="button" aria-label="閉じる">×</button></div><p id="drops-name"></p><div id="drop-grid" class="drop-grid"></div></dialog>
   <noscript>このページはJavaScriptを有効にして開いてください。</noscript>
 </body>
 </html>

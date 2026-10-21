@@ -5,7 +5,7 @@ export function loadSettings(catalog,validate){
   try{const value=JSON.parse(localStorage.getItem(KEY));
     if(value?.version!==1)return defaults();
     return {...defaults(),enabled:value.enabled===true,onlyMatches:value.onlyMatches===true,
-      rules:Array.isArray(value.rules)?value.rules.filter(r=>validate(catalog,r)).slice(0,100):[]};
+      rules:Array.isArray(value.rules)?value.rules.filter(r=>validate(catalog,r)).slice(0,100).map(rule=>rule.kind==='petal'?{...rule,variant:'*',mobMin:0,dropMin:0}:rule):[]};
   }catch{return defaults()}
 }
 

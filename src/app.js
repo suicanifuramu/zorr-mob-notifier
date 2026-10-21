@@ -3,7 +3,7 @@ import {loadSettings,saveSettings,claimNotification} from './storage.js';
 
 const $=id=>document.getElementById(id);
 const make=(tag,className,text)=>{const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node};
-let catalog,settings,stream,registration,editingId=null;
+let catalog,settings,stream,registration,editingId=null,selectedTargetSlug=null;
 let events=[],streamConnected=false,botStatus=null,toastTimer,reconnectTimer,streamCursor=0;
 let polling=false,pollTimer,connectionTimer,connectionFailures=0;
 const permission=()=>('Notification' in window?Notification.permission:'unsupported');
@@ -28,7 +28,7 @@ function sprite(kind,item,{size='',rarity=7}={}){
 }
 
 function ruleName(rule){return rule.kind==='any'?'すべてのモブ':(rule.kind==='mob'?catalog.mobBySlug:catalog.petalBySlug).get(rule.target)?.name||rule.target}
-function ruleSubtitle(rule){const variant=rule.variant==='*'?'All variants':catalog.variantBySlug.get(rule.variant).name;return `${variant} · Mob ${catalog.rarities[rule.mobMin].name}+${rule.kind==='petal'?` · Petal ${catalog.rarities[rule.dropMin].name}+`:''}`}
+function ruleSubtitle(rule){if(rule.kind==='petal')return '';const variant=rule.variant==='*'?'All variants':catalog.variantBySlug.get(rule.variant).name;return `${variant} · Mob ${catalog.rarities[rule.mobMin].name}+`}
 
 function renderRules(){
   $('rules').replaceChildren();$('rule-count').textContent=settings.rules.filter(r=>r.enabled).length;
@@ -37,7 +37,7 @@ function renderRules(){
     const row=make('div',`rule${rule.enabled?'':' disabled'}`);
     if(rule.kind==='any'){const icon=make('span','sprite small');icon.append(make('span','empty-flower','✿'));row.append(icon)}
     else row.append(sprite(rule.kind,(rule.kind==='mob'?catalog.mobBySlug:catalog.petalBySlug).get(rule.target),{size:'small'}));
-    const info=make('div','rule-info');info.append(make('div','rule-name',ruleName(rule)),make('div','rule-subtitle',ruleSubtitle(rule)));
+    const info=make('div','rule-info');info.append(make('div','rule-name',ruleName(rule)));const subtitle=ruleSubtitle(rule);if(subtitle)info.append(make('div','rule-subtitle',subtitle));
     const actions=make('div','rule-actions'),toggle=make('label','switch'),input=make('input');input.type='checkbox';input.checked=rule.enabled;input.setAttribute('aria-label',`${ruleName(rule)} の通知条件を有効にする`);input.onchange=()=>{rule.enabled=input.checked;save();renderRules();renderFeed()};toggle.append(input,make('span'));actions.append(toggle);
     const edit=make('button','icon-button','✎');edit.type='button';edit.title='編集';edit.setAttribute('aria-label',`${ruleName(rule)} を編集`);edit.onclick=()=>openEditor(rule);
     const remove=make('button','icon-button delete','×');remove.type='button';remove.title='削除';remove.setAttribute('aria-label',`${ruleName(rule)} を削除`);remove.onclick=()=>{settings.rules=settings.rules.filter(r=>r.id!==rule.id);save();renderRules();renderFeed()};
@@ -71,7 +71,6 @@ function renderFeed(){
   feed.replaceChildren(fragment);$('feed-count').textContent=filtered.length;$('feed-empty').hidden=filtered.length>0;
   if(!filtered.length){
     $('empty-feed-title').textContent=settings.onlyMatches?'一致する出現ログはまだありません':streamConnected?'次の出現を待っています':'出現ログに接続しています';
-    $('empty-feed-description').textContent=settings.onlyMatches?'通知条件に一致したモブがここに表示されます。':'新しいモブが出現すると、ここに表示されます。';
   }
 }
 
@@ -84,33 +83,42 @@ function showDrops(event){
 }
 
 function updateTarget(){
-  const kind=$('rule-kind').value;$('target-field').hidden=kind==='any';$('drop-field').hidden=kind!=='petal';$('rule-preview').replaceChildren();
-  $('rule-target').required=kind!=='any';$('rule-target').setCustomValidity('');
-  const options=kind==='mob'?catalog.mobs:catalog.petals;
-  $('target-options').replaceChildren(...options.map(p=>new Option(p.name,p.name)));
-  $('rule-description').textContent=kind==='petal'?'このペタルを落とす可能性があるモブを通知。卵・Magic置換・variant追加候補も含みます。':kind==='mob'?'このモブの出現を、選んだvariantとレアリティの範囲で通知します。':'選んだvariantとレアリティに一致する、すべてのモブを通知します。';
-  previewTarget();
+  const kind=$('rule-kind').value;$('target-picker').hidden=kind==='any';$('rule-options').hidden=kind==='petal';
+  $('target-grid').setAttribute('aria-label',kind==='mob'?'モブ':'ペタル');
+  renderTargets();
 }
-function selectedTarget(){const kind=$('rule-kind').value;return (kind==='mob'?catalog.mobs:catalog.petals).find(p=>normalizeName(p.name)===normalizeName($('rule-target').value)||p.slug===$('rule-target').value)}
-function previewTarget(){const target=selectedTarget();$('rule-preview').replaceChildren();if(target&&$('rule-kind').value!=='any')$('rule-preview').append(sprite($('rule-kind').value,target));$('rule-error').hidden=true;$('rule-target').setCustomValidity('')}
+function selectedTarget(){const kind=$('rule-kind').value;return (kind==='mob'?catalog.mobs:catalog.petals).find(p=>selectedTargetSlug?p.slug===selectedTargetSlug:normalizeName(p.name)===normalizeName($('rule-target').value))}
+function renderTargets(){
+  const kind=$('rule-kind').value,grid=$('target-grid');grid.replaceChildren();$('rule-error').hidden=true;
+  if(kind==='any')return;
+  const query=normalizeName($('rule-target').value),selected=selectedTarget();
+  const targets=(kind==='mob'?catalog.mobs:catalog.petals).filter(item=>normalizeName(item.name).includes(query));
+  const fragment=document.createDocumentFragment();
+  for(const item of targets){
+    const button=make('button','target-option');button.type='button';button.dataset.target=item.slug;button.setAttribute('aria-label',item.name);button.setAttribute('aria-pressed',String(selected?.slug===item.slug));
+    const icon=sprite(kind,item);icon.setAttribute('aria-hidden','true');button.append(icon);if(kind==='mob')button.append(make('span','target-name',item.name));
+    button.onclick=()=>{selectedTargetSlug=item.slug;$('rule-error').hidden=true;for(const option of grid.children)option.setAttribute('aria-pressed',String(option===button))};
+    fragment.append(button);
+  }
+  grid.append(fragment);grid.scrollTop=0;$('target-empty').hidden=targets.length>0;
+}
 function openEditor(rule){
   if(!rule&&settings.rules.length>=100){notice('通知条件は100件まで保存できます。',true);return}
-  editingId=rule?.id||null;$('rule-title').textContent=rule?'通知条件を編集':'通知条件を追加';
+  editingId=rule?.id||null;selectedTargetSlug=rule&&rule.kind!=='any'?rule.target:null;$('rule-title').textContent=rule?'通知条件を編集':'通知条件を追加';
   $('rule-kind').value=rule?.kind||'petal';$('rule-target').value=rule&&rule.kind!=='any'?ruleName(rule):'';
-  $('rule-variant').value=rule?.variant||'*';$('rule-mob-min').value=rule?.mobMin??0;$('rule-drop-min').value=rule?.dropMin??0;
+  $('rule-variant').value=rule?.variant||'*';$('rule-mob-min').value=rule?.mobMin??8;
   updateTarget();$('rule-error').hidden=true;$('rule-dialog').showModal();
   if($('rule-kind').value!=='any')$('rule-target').focus();
 }
 function saveRule(event){
   event.preventDefault();const kind=$('rule-kind').value,target=selectedTarget();
-  if(kind!=='any'&&!target){$('rule-error').textContent='候補から正しい名前を選択してください。';$('rule-error').hidden=false;$('rule-target').focus();return}
+  if(kind!=='any'&&!target){$('rule-error').textContent='アイコンを選択してください。';$('rule-error').hidden=false;$('rule-target').focus();return}
   const previous=settings.rules.find(r=>r.id===editingId);
-  const rule={id:editingId||crypto.randomUUID(),kind,target:kind==='any'?'*':target.slug,variant:$('rule-variant').value,
-    mobMin:Number($('rule-mob-min').value),dropMin:Number($('rule-drop-min').value),enabled:previous?.enabled??true};
+  const rule={id:editingId||crypto.randomUUID(),kind,target:kind==='any'?'*':target.slug,variant:kind==='petal'?'*':$('rule-variant').value,
+    mobMin:kind==='petal'?0:Number($('rule-mob-min').value),dropMin:0,enabled:previous?.enabled??true};
   if(!validateRule(catalog,rule))return;
   if(editingId)settings.rules=settings.rules.map(r=>r.id===editingId?rule:r);else settings.rules.push(rule);
   save();renderRules();renderFeed();$('rule-dialog').close();
-  if(!settings.enabled)notice('通知条件を保存しました。上の「通知を有効に」でデスクトップ通知を開始できます。');
 }
 
 function renderNotificationButton(){
@@ -130,7 +138,7 @@ async function enableNotifications(){
   else notice('通知は許可されませんでした。出現ログは引き続き利用できます。',true);
 }
 async function showNotification(title,body,{tag,eventId}={}){
-  const options={body,tag,icon:new URL('/favicon.svg',location.origin).href,data:{eventId},renotify:false};
+  const options={body,tag,data:{eventId},renotify:false};
   try{
     const reg=await registration;
     if(reg)return await reg.showNotification(title,options);
@@ -198,7 +206,7 @@ function connect(){
     if(polling)return;
     try{applySpawn(JSON.parse(message.data));resetHeartbeat()}catch{}
   });
-  stream.onerror=()=>{if(polling)return;streamConnected=false;renderConnection();if(!events.length){$('empty-feed-title').textContent='配信に再接続しています';$('empty-feed-description').textContent='接続が戻ると自動でログを再開します。'}
+  stream.onerror=()=>{if(polling)return;streamConnected=false;renderConnection();if(!events.length)$('empty-feed-title').textContent='配信に再接続しています';
     // HTTP 502/503 can put native EventSource in CLOSED, which will not retry.
     if(stream.readyState===EventSource.CLOSED){stream.close();if(++connectionFailures>=2)startPolling();else reconnectTimer=setTimeout(connect,5000)}
   };
@@ -209,13 +217,12 @@ async function init(){
   catalog=indexCatalog(await response.json());settings=loadSettings(catalog,validateRule);
   registration='serviceWorker' in navigator?navigator.serviceWorker.register('/sw.js').then(()=>navigator.serviceWorker.ready).catch(()=>null):Promise.resolve(null);
   $('rule-variant').append(new Option('All variants','*'),...catalog.variants.map(v=>new Option(v.name,v.slug)));
-  for(const r of catalog.rarities){$('rule-mob-min').add(new Option(r.name,r.id));if(r.id<=7)$('rule-drop-min').add(new Option(r.name,r.id))}
-  $('rule-form').onsubmit=saveRule;$('rule-kind').onchange=()=>{$('rule-target').value='';updateTarget()};$('rule-target').oninput=previewTarget;
+  for(const r of catalog.rarities)$('rule-mob-min').add(new Option(r.name,r.id));
+  $('rule-form').onsubmit=saveRule;$('rule-kind').onchange=()=>{selectedTargetSlug=null;$('rule-target').value='';$('rule-variant').value='*';$('rule-mob-min').value=8;updateTarget()};$('rule-target').oninput=()=>{selectedTargetSlug=null;renderTargets()};
   $('add-rule').onclick=()=>openEditor();$('close-rule').onclick=$('cancel-rule').onclick=()=>$('rule-dialog').close();$('close-drops').onclick=()=>$('drops-dialog').close();
   for(const id of ['rule-dialog','drops-dialog'])$(id).addEventListener('click',event=>{if(event.target===$(id)){const b=$(id).getBoundingClientRect();if(event.clientX<b.left||event.clientX>b.right||event.clientY<b.top||event.clientY>b.bottom)$(id).close()}});
   $('only-matches').checked=settings.onlyMatches;$('only-matches').onchange=()=>{settings.onlyMatches=$('only-matches').checked;save();renderFeed()};
   $('notifications').onclick=enableNotifications;$('test-notification').onclick=()=>void showNotification('Zorr notifier','デスクトップ通知が有効です。',{tag:'zorr-notifier-test'});
-  $('source-date').textContent=`Game data · ${catalog.source.snapshotDate}`;
   document.addEventListener('visibilitychange',renderNotificationButton);
   renderRules();renderFeed();renderNotificationButton();connect();
 }
