@@ -48,6 +48,11 @@ const fontResponse=await fetch(fontURL,{signal:AbortSignal.timeout(30000)});
 if(!fontResponse.ok)throw new Error(`Font: ${fontResponse.status}`);
 const font=Buffer.from(await fontResponse.arrayBuffer());
 await writeFile(new URL('public/assets/fredoka-one.ttf',root),font);
+const fontLicenseURL='https://raw.githubusercontent.com/google/fonts/be2838a23fd2918408e22b25c54135da76525ff6/ofl/fredokaone/OFL.txt';
+const licenseResponse=await fetch(fontLicenseURL,{signal:AbortSignal.timeout(30000)});
+if(!licenseResponse.ok)throw new Error(`Font license: ${licenseResponse.status}`);
+await mkdir(new URL('public/licenses/',root),{recursive:true});
+await writeFile(new URL('public/licenses/Fredoka-One-OFL.txt',root),await licenseResponse.text());
 const browser=await playwright.launch({executablePath:await chromium.executablePath(),args:chromium.args,headless:true});
 try {
   const page=await browser.newPage();

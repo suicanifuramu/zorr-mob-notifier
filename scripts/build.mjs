@@ -17,4 +17,6 @@ const css=await put('style','css',(await readFile(new URL('src/style.css',root),
 const html=(await readFile(new URL('src/index.html',root),'utf8')).replace('__STYLE_URL__',css).replace('__APP_URL__',app);
 await writeFile(new URL('index.html',dist),html);
 for(const file of ['favicon.svg','sw.js','_headers','_routes.json'])await copyFile(new URL(`public/${file}`,root),new URL(file,dist));
+await mkdir(new URL('licenses/',dist),{recursive:true});
+await copyFile(new URL('public/licenses/Fredoka-One-OFL.txt',root),new URL('licenses/Fredoka-One-OFL.txt',dist));
 console.log(`Built ${catalog.mobs.length} mobs / ${catalog.petals.length} petals → dist/`);
