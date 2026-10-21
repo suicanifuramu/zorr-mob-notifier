@@ -57,8 +57,8 @@ export function matchesRule(catalog,event,rule) {
   if(rule.kind==='any')return true;
   if(rule.kind==='mob')return event.mob===rule.target;
   if(rule.kind==='petal'){
-    // Do not round tiny probabilities to zero. This is a possible-drop filter,
-    // not a guarantee or a claim about the server's luck/buff implementation.
+    // Saved petal rarity thresholds use the possible rarity range. Gallery
+    // probabilities are rounded separately for display.
     const highestPossible=Math.min(7,Math.max(1,event.rarity));
     return rule.dropMin<=highestPossible && dropsFor(catalog,event).some(d=>d.petal.slug===rule.target);
   }

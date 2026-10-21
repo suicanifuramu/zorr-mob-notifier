@@ -82,7 +82,7 @@ function showDrops(event){
   const mob=catalog.mobBySlug.get(event.mob),rarity=catalog.rarities[event.rarity];
   $('drops-name').textContent=event.name||(mob?`${rarity?.name||''} ${mob.name}`.trim():'');
   const grid=$('drop-grid');grid.replaceChildren();
-  const drops=dropsFor(catalog,event);let conditional=false;
+  const drops=dropsFor(catalog,event);let conditional=false,rendered=0;
   for(const {petal,rolls=[]} of drops){
     const row=make('div','drop-row'),summary=make('div','drop-summary'),cells=make('div','drop-rarities');
     summary.append(make('div','drop-name',petal.name));
@@ -93,6 +93,7 @@ function showDrops(event){
       if(!rates.has(chance.rarity))rates.set(chance.rarity,[]);
       rates.get(chance.rarity).push({...chance,conditional:roll.conditional,index});
     }
+    if(!rates.size)continue;
     for(const [dropRarity,chances] of [...rates].sort((a,b)=>a[0]-b[0])){
       const info=catalog.rarities[dropRarity];if(!info)continue;
       const cell=make('div','drop-cell'),label=make('div','drop-rarity',info.name);label.style.color=info.color;
@@ -105,11 +106,11 @@ function showDrops(event){
       }
       cells.append(cell);
     }
-    row.append(summary,cells);grid.append(row);
+    row.append(summary,cells);grid.append(row);rendered++;
   }
-  if(!drops.length)grid.append(make('p','drop-none','No known drops for this mob.'));
-  const note=$('drop-note');note.hidden=!drops.length;
-  note.textContent=drops.length?`Base rates · before personal bonuses${conditional?' · Flash rates assume that extra drop is selected.':''}`:'';
+  if(!rendered)grid.append(make('p','drop-none','No known drops for this mob.'));
+  const note=$('drop-note');note.hidden=!rendered;
+  note.textContent=rendered?`Base rates · before personal bonuses${conditional?' · Flash rates assume that extra drop is selected.':''}`:'';
   $('drops-dialog').showModal();
 }
 

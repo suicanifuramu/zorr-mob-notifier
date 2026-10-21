@@ -21,8 +21,10 @@ Petal rules cover all variants and mob rarities; old saved petal rules are loade
 without their former variant or rarity restrictions. Matching includes generated
 eggs, Magic/Arcane replacements, variant extras, and the possible Flash candidates.
 It matches **possible drops**, not confirmed drops or a player's luck/buffs.
-Tiny rates are not rounded to zero. Opening a spawn's drop list shows one row per
-possible petal, with every rarity variant and its base rate. A petal reached by
+Drop rates follow the in-game gallery: each roll is rounded to two decimals and
+rows that round to zero are omitted, so the app never shows a rarity the game
+hides. Opening a spawn's drop list shows one row per possible petal, with the
+same rounded rarity variants and base rates the game displays. A petal reached by
 more than one roll shows each rate separately, and Flash-only candidates are
 marked conditional; separate rolls are not combined into one aggregate
 chance. Rates are base rates before personal bonuses. The data snapshot is

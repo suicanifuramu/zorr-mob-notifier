@@ -91,7 +91,7 @@ test('conditions within one rule are AND; enabled rules are OR',()=>{
   assert.ok(matchesRule(catalog,spawn({variant:'shiny'}),rule({kind:'any',target:'*',variant:'shiny'})));
   assert.equal(matchingRules(catalog,spawn(),[rule({target:'rose'}),rule()]).length,1);
 });
-test('drop rarity boundary preserves tiny rates hidden by rounded tooltip',()=>{
+test('legacy petal rarity thresholds use the possible rarity range',()=>{
   assert.ok(matchesRule(catalog,spawn({rarity:7}),rule({target:'rock',dropMin:7})));
   assert.ok(!matchesRule(catalog,spawn({rarity:6}),rule({target:'rock',dropMin:7})));
   assert.ok(matchesRule(catalog,spawn({rarity:0}),rule({dropMin:1})));
