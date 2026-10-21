@@ -127,7 +127,9 @@ runtime. Asset filenames are content-hashed by the normal build.
 
 Game artwork, data, and font retain their respective licenses. The original
 Fredoka One SIL Open Font License is included in `public/licenses/` and served
-at `/licenses/Fredoka-One-OFL.txt`. The upstream
+at `/licenses/Fredoka-One-OFL.txt`. Notification icons use
+[Lucide](https://lucide.dev/); its license is served at
+`/licenses/Lucide.txt`. The upstream
 [zorr-assembler](https://github.com/suicanifuramu/zorr-assembler) is MIT licensed;
 its game's generated assets are excluded from that license. Platform references:
 [Pages Git integration](https://developers.cloudflare.com/pages/configuration/git-integration/),

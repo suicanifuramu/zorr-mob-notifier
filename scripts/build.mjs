@@ -19,4 +19,5 @@ await writeFile(new URL('index.html',dist),html);
 for(const file of ['sw.js','_headers','_routes.json'])await copyFile(new URL(`public/${file}`,root),new URL(file,dist));
 await mkdir(new URL('licenses/',dist),{recursive:true});
 await copyFile(new URL('public/licenses/Fredoka-One-OFL.txt',root),new URL('licenses/Fredoka-One-OFL.txt',dist));
+await copyFile(new URL('node_modules/lucide/LICENSE',root),new URL('licenses/Lucide.txt',dist));
 console.log(`Built ${catalog.mobs.length} mobs / ${catalog.petals.length} petals → dist/`);

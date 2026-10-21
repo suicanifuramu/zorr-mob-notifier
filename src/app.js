@@ -1,5 +1,6 @@
 import {indexCatalog,matchingRules,dropsFor,validateRule,validEvent,normalizeName} from './matching.js';
 import {loadSettings,saveSettings,claimNotification} from './storage.js';
+import {createElement,Bell,BellRing,BellOff} from 'lucide';
 
 const $=id=>document.getElementById(id);
 const make=(tag,className,text)=>{const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node};
@@ -7,14 +8,14 @@ let catalog,settings,stream,registration,editingId=null,selectedTargetSlug=null;
 let events=[],streamConnected=false,botStatus=null,toastTimer,reconnectTimer,streamCursor=0;
 let polling=false,pollTimer,connectionTimer,connectionFailures=0;
 const permission=()=>('Notification' in window?Notification.permission:'unsupported');
-const timeFormat=new Intl.DateTimeFormat(undefined,{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
-const dateFormat=new Intl.DateTimeFormat(undefined,{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+const timeFormat=new Intl.DateTimeFormat('en',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+const dateFormat=new Intl.DateTimeFormat('en',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'});
 
 function notice(message,error=false,{persistent=false}={}){
   clearTimeout(toastTimer);$('notice').hidden=false;$('notice').textContent=message;$('notice').classList.toggle('error',error);
   if(!persistent)toastTimer=setTimeout(()=>$('notice').hidden=true,7000);
 }
-function save(){if(!saveSettings(settings))notice('設定を保存できません。このタブを閉じると設定が失われます。',true)}
+function save(){if(!saveSettings(settings))notice('Unable to save settings. Changes will be lost when this tab closes.',true)}
 
 function sprite(kind,item,{size='',rarity=7}={}){
   const node=make('span',`sprite ${size}`);node.setAttribute('role','img');node.setAttribute('aria-label',item.name);node.title=item.name;
@@ -27,7 +28,7 @@ function sprite(kind,item,{size='',rarity=7}={}){
   image.decoding='async';node.append(image);return node;
 }
 
-function ruleName(rule){return rule.kind==='any'?'すべてのモブ':(rule.kind==='mob'?catalog.mobBySlug:catalog.petalBySlug).get(rule.target)?.name||rule.target}
+function ruleName(rule){return rule.kind==='any'?'All mobs':(rule.kind==='mob'?catalog.mobBySlug:catalog.petalBySlug).get(rule.target)?.name||rule.target}
 function ruleSubtitle(rule){if(rule.kind==='petal')return '';const variant=rule.variant==='*'?'All variants':catalog.variantBySlug.get(rule.variant).name;return `${variant} · Mob ${catalog.rarities[rule.mobMin].name}+`}
 
 function renderRules(){
@@ -38,9 +39,9 @@ function renderRules(){
     if(rule.kind==='any'){const icon=make('span','sprite small');icon.append(make('span','empty-flower','✿'));row.append(icon)}
     else row.append(sprite(rule.kind,(rule.kind==='mob'?catalog.mobBySlug:catalog.petalBySlug).get(rule.target),{size:'small'}));
     const info=make('div','rule-info');info.append(make('div','rule-name',ruleName(rule)));const subtitle=ruleSubtitle(rule);if(subtitle)info.append(make('div','rule-subtitle',subtitle));
-    const actions=make('div','rule-actions'),toggle=make('label','switch'),input=make('input');input.type='checkbox';input.checked=rule.enabled;input.setAttribute('aria-label',`${ruleName(rule)} の通知条件を有効にする`);input.onchange=()=>{rule.enabled=input.checked;save();renderRules();renderFeed()};toggle.append(input,make('span'));actions.append(toggle);
-    const edit=make('button','icon-button','✎');edit.type='button';edit.title='編集';edit.setAttribute('aria-label',`${ruleName(rule)} を編集`);edit.onclick=()=>openEditor(rule);
-    const remove=make('button','icon-button delete','×');remove.type='button';remove.title='削除';remove.setAttribute('aria-label',`${ruleName(rule)} を削除`);remove.onclick=()=>{settings.rules=settings.rules.filter(r=>r.id!==rule.id);save();renderRules();renderFeed()};
+    const actions=make('div','rule-actions'),toggle=make('label','switch'),input=make('input');input.type='checkbox';input.checked=rule.enabled;input.setAttribute('aria-label',`Enable filter for ${ruleName(rule)}`);input.onchange=()=>{rule.enabled=input.checked;save();renderRules();renderFeed()};toggle.append(input,make('span'));actions.append(toggle);
+    const edit=make('button','icon-button','✎');edit.type='button';edit.title='Edit';edit.setAttribute('aria-label',`Edit ${ruleName(rule)}`);edit.onclick=()=>openEditor(rule);
+    const remove=make('button','icon-button delete','×');remove.type='button';remove.title='Delete';remove.setAttribute('aria-label',`Delete ${ruleName(rule)}`);remove.onclick=()=>{settings.rules=settings.rules.filter(r=>r.id!==rule.id);save();renderRules();renderFeed()};
     actions.append(edit,remove);row.append(info,actions);$('rules').append(row);
   }
 }
@@ -55,36 +56,36 @@ function renderFeed(){
     const main=make('div','spawn-main'),meta=make('div','spawn-meta');const r=make('span','',rarity.name);r.style.color=rarity.color;meta.append(r);
     if(event.variant!=='normal'){const badge=make('span','variant-badge',variant.name);badge.style.setProperty('--variant-color',variant.color);meta.append(badge)}
     if(event.source==='demo')meta.append(make('span','variant-badge','DEMO'));
-    if(matches.length)meta.append(make('span','match-label','一致'));
+    if(matches.length)meta.append(make('span','match-label','Match'));
     main.append(meta,make('div','spawn-name',mob.name));
     const drops=dropsFor(catalog,event),dropRow=make('div','spawn-drops');
     for(const drop of drops.slice(0,5)){
       const wanted=matches.some(rule=>rule.kind==='petal'&&rule.target===drop.petal.slug);
-      const button=make('button',`drop-button${wanted?' wanted':''}`);button.type='button';button.title=`${drop.petal.name}${drop.conditional?' (Flash候補)':''}`;button.setAttribute('aria-label',`${drop.petal.name}を含むドロップ候補`);button.append(sprite('petal',drop.petal,{size:'tiny'}));button.onclick=()=>showDrops(event);dropRow.append(button);
+      const button=make('button',`drop-button${wanted?' wanted':''}`);button.type='button';button.title=`${drop.petal.name}${drop.conditional?' (possible Flash drop)':''}`;button.setAttribute('aria-label',`Possible drops including ${drop.petal.name}`);button.append(sprite('petal',drop.petal,{size:'tiny'}));button.onclick=()=>showDrops(event);dropRow.append(button);
     }
-    if(drops.length){const more=make('button','more-drops',drops.length>5?`+${drops.length-5}`:'Drops');more.type='button';more.setAttribute('aria-label','すべてのドロップ候補');more.onclick=()=>showDrops(event);dropRow.append(more)}
+    if(drops.length>5){const more=make('button','more-drops',`+${drops.length-5}`);more.type='button';more.setAttribute('aria-label','Show all possible drops');more.onclick=()=>showDrops(event);dropRow.append(more)}
     main.append(dropRow);
     const stamp=make('div','spawn-time'),time=make('time','',timeFormat.format(new Date(event.createdAt)));time.dateTime=event.createdAt;time.title=dateFormat.format(new Date(event.createdAt));
-    if(/^https:\/\/discord\.com\/channels\/\d+\/\d+\/\d+$/.test(event.sourceUrl||'')){const link=make('a');link.href=event.sourceUrl;link.target='_blank';link.rel='noopener noreferrer';link.title='Discordで元メッセージを開く';link.append(time);stamp.append(link)}else stamp.append(time);
+    if(/^https:\/\/discord\.com\/channels\/\d+\/\d+\/\d+$/.test(event.sourceUrl||'')){const link=make('a');link.href=event.sourceUrl;link.target='_blank';link.rel='noopener noreferrer';link.title='Open original message in Discord';link.append(time);stamp.append(link)}else stamp.append(time);
     row.append(main,stamp);fragment.append(row);
   }
   feed.replaceChildren(fragment);$('feed-count').textContent=filtered.length;$('feed-empty').hidden=filtered.length>0;
   if(!filtered.length){
-    $('empty-feed-title').textContent=settings.onlyMatches?'一致する出現ログはまだありません':streamConnected?'次の出現を待っています':'出現ログに接続しています';
+    $('empty-feed-title').textContent=settings.onlyMatches?'No matching spawns yet':streamConnected?'Waiting for the next spawn…':'Connecting to spawn feed…';
   }
 }
 
 function showDrops(event){
   $('drops-name').textContent=event.name;$('drop-grid').replaceChildren();
   const drops=dropsFor(catalog,event);
-  for(const {petal,conditional} of drops){const box=make('div');box.append(sprite('petal',petal),make('small','',petal.name));if(conditional)box.append(make('span','conditional','Flash候補'));$('drop-grid').append(box)}
-  if(!drops.length)$('drop-grid').append(make('p','drop-none','このモブのドロップ候補はありません。'));
+  for(const {petal,conditional} of drops){const box=make('div');box.append(sprite('petal',petal),make('small','',petal.name));if(conditional)box.append(make('span','conditional','Possible Flash drop'));$('drop-grid').append(box)}
+  if(!drops.length)$('drop-grid').append(make('p','drop-none','No known drops for this mob.'));
   $('drops-dialog').showModal();
 }
 
 function updateTarget(){
   const kind=$('rule-kind').value;$('target-picker').hidden=kind==='any';$('rule-options').hidden=kind==='petal';
-  $('target-grid').setAttribute('aria-label',kind==='mob'?'モブ':'ペタル');
+  $('target-grid').setAttribute('aria-label',kind==='mob'?'Mobs':'Petals');
   renderTargets();
 }
 function selectedTarget(){const kind=$('rule-kind').value;return (kind==='mob'?catalog.mobs:catalog.petals).find(p=>selectedTargetSlug?p.slug===selectedTargetSlug:normalizeName(p.name)===normalizeName($('rule-target').value))}
@@ -103,8 +104,8 @@ function renderTargets(){
   grid.append(fragment);grid.scrollTop=0;$('target-empty').hidden=targets.length>0;
 }
 function openEditor(rule){
-  if(!rule&&settings.rules.length>=100){notice('通知条件は100件まで保存できます。',true);return}
-  editingId=rule?.id||null;selectedTargetSlug=rule&&rule.kind!=='any'?rule.target:null;$('rule-title').textContent=rule?'通知条件を編集':'通知条件を追加';
+  if(!rule&&settings.rules.length>=100){notice('You can save up to 100 filters.',true);return}
+  editingId=rule?.id||null;selectedTargetSlug=rule&&rule.kind!=='any'?rule.target:null;$('rule-title').textContent=rule?'Edit filter':'Add filter';
   $('rule-kind').value=rule?.kind||'petal';$('rule-target').value=rule&&rule.kind!=='any'?ruleName(rule):'';
   $('rule-variant').value=rule?.variant||'*';$('rule-mob-min').value=rule?.mobMin??8;
   updateTarget();$('rule-error').hidden=true;$('rule-dialog').showModal();
@@ -112,7 +113,7 @@ function openEditor(rule){
 }
 function saveRule(event){
   event.preventDefault();const kind=$('rule-kind').value,target=selectedTarget();
-  if(kind!=='any'&&!target){$('rule-error').textContent='アイコンを選択してください。';$('rule-error').hidden=false;$('rule-target').focus();return}
+  if(kind!=='any'&&!target){$('rule-error').textContent='Select an icon.';$('rule-error').hidden=false;$('rule-target').focus();return}
   const previous=settings.rules.find(r=>r.id===editingId);
   const rule={id:editingId||crypto.randomUUID(),kind,target:kind==='any'?'*':target.slug,variant:kind==='petal'?'*':$('rule-variant').value,
     mobMin:kind==='petal'?0:Number($('rule-mob-min').value),dropMin:0,enabled:previous?.enabled??true};
@@ -122,20 +123,23 @@ function saveRule(event){
 }
 
 function renderNotificationButton(){
-  const p=permission(),active=settings.enabled&&p==='granted';$('notifications').classList.toggle('active',active);
-  $('notification-label').textContent=p==='unsupported'?'通知に未対応':p==='denied'?'通知がブロックされています':active?'通知オン':'通知を有効に';
-  $('notifications').disabled=p==='unsupported';$('test-notification').disabled=p!=='granted'||!settings.enabled;
-  $('notifications').setAttribute('aria-pressed',String(active));
+  const p=permission(),active=settings.enabled&&p==='granted',button=$('notifications');button.classList.toggle('active',active);
+  const icon=p==='denied'||p==='unsupported'?BellOff:p==='granted'?BellRing:Bell;
+  const iconName=p==='denied'||p==='unsupported'?'bell-off':p==='granted'?'bell-ring':'bell';
+  $('notification-icon').replaceChildren(createElement(icon,{'aria-hidden':'true',class:`lucide lucide-${iconName}`,width:20,height:20}));
+  const label=p==='unsupported'?'Notifications unavailable':p==='denied'?'Notifications blocked':active?'Notifications on — click to disable':p==='granted'?'Notifications off — click to enable':'Enable notifications';
+  button.title=label;button.setAttribute('aria-label',label);button.disabled=p==='unsupported';$('test-notification').disabled=!active;
+  button.setAttribute('aria-pressed',String(active));
 }
 async function enableNotifications(){
   if(permission()==='unsupported')return;
-  if(permission()==='denied'){notice('ブラウザのサイト設定から通知を許可して、ページを再読み込みしてください。',true);return}
+  if(permission()==='denied'){notice('Allow notifications in your browser settings, then reload this page.',true);return}
   if(settings.enabled&&permission()==='granted'){settings.enabled=false;save();renderNotificationButton();return}
   // Request permission directly in the click handler, before waiting for the SW.
   const result=await Notification.requestPermission();
   settings.enabled=result==='granted';save();renderNotificationButton();
-  if(settings.enabled){notice(settings.rules.length?'通知を有効にしました。新しい一致モブの出現時に通知します。':'通知を有効にしました。続けて通知条件を追加してください。');}
-  else notice('通知は許可されませんでした。出現ログは引き続き利用できます。',true);
+  if(settings.enabled){notice(settings.rules.length?'Notifications enabled for new matching spawns.':'Notifications enabled. Add a filter to receive alerts.');}
+  else notice('Notifications were not allowed. The live feed is still available.',true);
 }
 async function showNotification(title,body,{tag,eventId}={}){
   const options={body,tag,data:{eventId},renotify:false};
@@ -143,7 +147,7 @@ async function showNotification(title,body,{tag,eventId}={}){
     const reg=await registration;
     if(reg)return await reg.showNotification(title,options);
     const notification=new Notification(title,options);notification.onclick=()=>{window.focus();if(eventId)document.getElementById(`spawn-${eventId}`)?.scrollIntoView({block:'center',behavior:'smooth'});notification.close()};
-  }catch{notice('通知を表示できませんでした。ブラウザとOSの通知設定を確認してください。',true)}
+  }catch{notice('Unable to show notifications. Check your browser and system notification settings.',true)}
 }
 async function notifySpawn(event){
   if(!settings.enabled||permission()!=='granted'||event.historical)return;
@@ -151,7 +155,7 @@ async function notifySpawn(event){
   const rules=matchingRules(catalog,event,settings.rules);if(!rules.length)return;
   if(!await claimNotification(event.key))return;
   const labels=[...new Set(rules.map(ruleName))].join(', ');
-  await showNotification(`${event.name} spawned!`,`条件: ${labels}`,{tag:`zorr-${event.key}`,eventId:event.id});
+  await showNotification(`${event.name} spawned!`,`Filters: ${labels}`,{tag:`zorr-${event.key}`,eventId:event.id});
 }
 
 function renderConnection(){
@@ -195,7 +199,7 @@ function connect(){
     if(polling)return;
     try{botStatus=JSON.parse(event.data);streamConnected=true;renderConnection();
       resetHeartbeat();
-      if(botStatus.demo)notice('デモ配信です。表示される出現はテストデータです。',false,{persistent:true});
+      if(botStatus.demo)notice('Demo feed: spawns shown here are test data.',false,{persistent:true});
     }catch{}
   });
   stream.addEventListener('snapshot',event=>{
@@ -206,7 +210,7 @@ function connect(){
     if(polling)return;
     try{applySpawn(JSON.parse(message.data));resetHeartbeat()}catch{}
   });
-  stream.onerror=()=>{if(polling)return;streamConnected=false;renderConnection();if(!events.length)$('empty-feed-title').textContent='配信に再接続しています';
+  stream.onerror=()=>{if(polling)return;streamConnected=false;renderConnection();if(!events.length)$('empty-feed-title').textContent='Reconnecting to spawn feed…';
     // HTTP 502/503 can put native EventSource in CLOSED, which will not retry.
     if(stream.readyState===EventSource.CLOSED){stream.close();if(++connectionFailures>=2)startPolling();else reconnectTimer=setTimeout(connect,5000)}
   };
@@ -222,8 +226,8 @@ async function init(){
   $('add-rule').onclick=()=>openEditor();$('close-rule').onclick=$('cancel-rule').onclick=()=>$('rule-dialog').close();$('close-drops').onclick=()=>$('drops-dialog').close();
   for(const id of ['rule-dialog','drops-dialog'])$(id).addEventListener('click',event=>{if(event.target===$(id)){const b=$(id).getBoundingClientRect();if(event.clientX<b.left||event.clientX>b.right||event.clientY<b.top||event.clientY>b.bottom)$(id).close()}});
   $('only-matches').checked=settings.onlyMatches;$('only-matches').onchange=()=>{settings.onlyMatches=$('only-matches').checked;save();renderFeed()};
-  $('notifications').onclick=enableNotifications;$('test-notification').onclick=()=>void showNotification('Zorr notifier','デスクトップ通知が有効です。',{tag:'zorr-notifier-test'});
+  $('notifications').onclick=enableNotifications;$('test-notification').onclick=()=>void showNotification('Zorr notifier','Desktop notifications are enabled.',{tag:'zorr-notifier-test'});
   document.addEventListener('visibilitychange',renderNotificationButton);
   renderRules();renderFeed();renderNotificationButton();connect();
 }
-init().catch(()=>{notice('ページを読み込めませんでした。再読み込みしてください。',true,{persistent:true});$('empty-feed-title').textContent='読み込みに失敗しました'});
+init().catch(()=>{notice('Unable to load the page. Please reload.',true,{persistent:true});$('empty-feed-title').textContent='Failed to load'});
