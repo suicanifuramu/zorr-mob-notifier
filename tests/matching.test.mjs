@@ -1,9 +1,10 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {indexCatalog,dropsFor,matchesRule,matchingRules,validateRule} from '../src/matching.js';
+import {indexCatalog,dropsFor,matchesRule,matchingRules,validateRule,normalizeRule,ruleTargets,ruleVariants} from '../src/matching.js';
 const catalog=indexCatalog(JSON.parse(await readFile(new URL('../data/catalog.json',import.meta.url))));
 const rule=overrides=>({id:'test',kind:'petal',target:'moon',variant:'*',mobMin:0,dropMin:0,enabled:true,...overrides});
+const grouped=overrides=>({id:'grouped',kind:'petal',targets:['moon'],variants:['*'],mobMin:0,dropMin:0,enabled:true,...overrides});
 const spawn=overrides=>({mob:'rock',rarity:8,variant:'normal',...overrides});
 
 test('petal rules include normal drops and generated eggs',()=>{
@@ -102,4 +103,76 @@ test('saved rules are checked against the current catalog',()=>{
   assert.ok(!validateRule(catalog,rule({target:'missing'})));
   assert.ok(!validateRule(catalog,rule({variant:'missing'})));
   assert.ok(!validateRule(catalog,rule({dropMin:8})));
+});
+
+test('grouped targets are ORed and every match stays one rule object',()=>{
+  const petal=grouped({targets:['rose','light']});
+  const mob=grouped({kind:'mob',targets:['rock','ladybug']});
+  assert.ok(matchesRule(catalog,spawn({mob:'ladybug'}),petal));
+  assert.ok(!matchesRule(catalog,spawn({mob:'ladybug'}),grouped({targets:['moon','halo']})));
+  assert.ok(matchesRule(catalog,spawn({mob:'ladybug'}),mob));
+  assert.ok(matchesRule(catalog,spawn({mob:'rock'}),mob));
+  assert.ok(!matchesRule(catalog,spawn({mob:'bush'}),mob));
+  const matches=matchingRules(catalog,spawn({mob:'ladybug'}),[petal]);
+  assert.equal(matches.length,1);
+  assert.equal(matches[0],petal);
+  assert.deepEqual(ruleTargets(petal),['rose','light']);
+  assert.deepEqual(ruleTargets(rule()),['moon']);
+  assert.deepEqual(ruleTargets(rule({kind:'any'})),[]);
+});
+
+test('selected variants are ORed and must also satisfy the other dimensions',()=>{
+  const any=grouped({kind:'any',targets:[],variants:['shiny','demonic']});
+  assert.ok(matchesRule(catalog,spawn({variant:'shiny'}),any));
+  assert.ok(matchesRule(catalog,spawn({variant:'demonic'}),any));
+  assert.ok(!matchesRule(catalog,spawn({variant:'normal'}),any));
+  assert.deepEqual(ruleVariants(any),['shiny','demonic']);
+  assert.deepEqual(ruleVariants(rule({variant:'magic'})),['magic']);
+  const mob=grouped({kind:'mob',targets:['rock','ladybug'],variants:['shiny'],mobMin:6});
+  assert.ok(matchesRule(catalog,spawn({mob:'rock',variant:'shiny',rarity:8}),mob));
+  assert.ok(matchesRule(catalog,spawn({mob:'ladybug',variant:'shiny',rarity:6}),mob));
+  assert.ok(!matchesRule(catalog,spawn({mob:'rock',variant:'shiny',rarity:5}),mob));
+  assert.ok(!matchesRule(catalog,spawn({mob:'rock',variant:'normal'}),mob));
+  assert.ok(!matchesRule(catalog,spawn({mob:'bush',variant:'shiny'}),mob));
+});
+
+test('grouped petal rules follow real Magic replacement and Flash candidates',()=>{
+  const rose=grouped({targets:['rose','magic_rose']});
+  assert.ok(matchesRule(catalog,spawn({mob:'ladybug'}),rose));
+  assert.ok(matchesRule(catalog,spawn({mob:'ladybug',variant:'magic'}),rose));
+  assert.ok(matchesRule(catalog,spawn({mob:'ladybug',variant:'arcane'}),rose));
+  assert.ok(!matchesRule(catalog,spawn({mob:'ladybug',variant:'magic'}),grouped({targets:['rose']})));
+  const flash=grouped({targets:['ticket','lightning']});
+  assert.ok(matchesRule(catalog,spawn({variant:'flash'}),flash));
+  assert.ok(!matchesRule(catalog,spawn(),flash));
+  assert.ok(matchesRule(catalog,spawn({mob:'firefly',variant:'flash'}),grouped({targets:['lightning']})));
+});
+
+test('canonical arrays take precedence and malformed selections are rejected',()=>{
+  assert.ok(validateRule(catalog,grouped({target:'missing',variant:'missing'})));
+  assert.ok(!validateRule(catalog,grouped({target:'moon',targets:[]})));
+  assert.ok(!validateRule(catalog,grouped({variant:'*',variants:[]})));
+  assert.ok(!validateRule(catalog,grouped({targets:'moon'})),'non-array targets');
+  assert.ok(!validateRule(catalog,grouped({variants:'*'})),'non-array variants');
+  assert.ok(!validateRule(catalog,grouped({variants:['*','magic']})),'wildcard cannot be mixed');
+  assert.ok(!validateRule(catalog,grouped({variants:['missing']})));
+  assert.ok(!validateRule(catalog,grouped({targets:['missing']})));
+  assert.ok(!validateRule(catalog,grouped({targets:['rose','rose']})),'duplicate targets');
+  assert.ok(!validateRule(catalog,grouped({variants:['magic','magic']})),'duplicate variants');
+  assert.ok(!validateRule(catalog,grouped({targets:Array.from({length:catalog.petals.length+1},()=> 'rose')})));
+  assert.ok(!validateRule(catalog,grouped({variants:Array.from({length:catalog.variants.length+1},()=> 'magic')})));
+  assert.ok(!validateRule(catalog,grouped({kind:'any',targets:['rock']})));
+  assert.ok(validateRule(catalog,grouped({kind:'any',targets:[],variants:['*']})));
+});
+
+test('normalizeRule produces the canonical grouped shape and defaults mob thresholds',()=>{
+  assert.deepEqual(normalizeRule(catalog,rule()),{id:'test',kind:'petal',targets:['moon'],variants:['*'],mobMin:0,dropMin:0,enabled:true});
+  assert.deepEqual(normalizeRule(catalog,rule({variant:'demonic',mobMin:9,dropMin:7})),
+    {id:'test',kind:'petal',targets:['moon'],variants:['*'],mobMin:0,dropMin:0,enabled:true});
+  assert.deepEqual(normalizeRule(catalog,{id:'mob',kind:'mob',targets:['rock'],variants:['shiny'],enabled:false}),
+    {id:'mob',kind:'mob',targets:['rock'],variants:['shiny'],mobMin:8,dropMin:0,enabled:false});
+  assert.deepEqual(normalizeRule(catalog,{id:'any',kind:'any',target:'*',variant:'*',enabled:true}),
+    {id:'any',kind:'any',targets:[],variants:['*'],mobMin:8,dropMin:0,enabled:true});
+  assert.deepEqual(normalizeRule(catalog,grouped({targets:['rose','rose']})),null);
+  assert.equal(normalizeRule(catalog,rule({target:'missing'})),null);
 });

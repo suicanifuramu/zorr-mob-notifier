@@ -1,12 +1,19 @@
-import {indexCatalog,matchingRules,dropsFor,validateRule,validEvent,normalizeName} from './matching.js';
+import {indexCatalog,matchingRules,dropsFor,validateRule,validEvent,normalizeName,ruleTargets,ruleVariants} from './matching.js';
 import {loadSettings,saveSettings,claimNotification} from './storage.js';
 import {createElement,Bell,BellRing,BellOff} from 'lucide';
 import {dropProbabilities,formatProbability} from './probability.js';
 import {eventSequence,isDeath,normalizeKiller,notificationKey,deathNotificationTitle,canNotifyDeath,mergeEvent} from './lifecycle.js';
+import {HOLD_MS,visibleItems,selectIcon,removed,holdCanceled,consumesHoldClick} from './selection.js';
 
 const $=id=>document.getElementById(id);
 const make=(tag,className,text)=>{const node=document.createElement(tag);if(className)node.className=className;if(text!==undefined)node.textContent=text;return node};
-let catalog,settings,stream,registration,editingId=null,selectedTargetSlug=null;
+let catalog,settings,stream,registration,editingId=null;
+let draftTargets=[],draftVariants=['*'],anchorSlug=null,multiMode=false;
+// A single pointer gesture owns the hold. The click that follows a completed
+// hold is suppressed once, based on the same pointerId, instead of a global
+// timer that could expire while the pointer is still down.
+let holdTimer=null,holdStart=null,holdSlug=null,holdPointerId=null,holdFired=false,suppressClick=null;
+
 let events=[],streamConnected=false,botStatus=null,toastTimer,reconnectTimer,streamCursor=0;
 let polling=false,pollTimer,connectionTimer,connectionFailures=0;
 let permissionRequest;
@@ -32,16 +39,41 @@ function sprite(kind,item,{size='',rarity=7}={}){
   image.decoding='async';node.append(image);return node;
 }
 
-function ruleName(rule){return rule.kind==='any'?'All mobs':(rule.kind==='mob'?catalog.mobBySlug:catalog.petalBySlug).get(rule.target)?.name||rule.target}
-function ruleSubtitle(rule){if(rule.kind==='petal')return '';const variant=rule.variant==='*'?'All variants':catalog.variantBySlug.get(rule.variant).name;return `${variant} · Mob ${catalog.rarities[rule.mobMin].name}+`}
+function targetItems(rule){
+  if(rule.kind==='any')return [];
+  const bySlug=rule.kind==='mob'?catalog.mobBySlug:catalog.petalBySlug;
+  return ruleTargets(rule).map(slug=>bySlug.get(slug)).filter(Boolean);
+}
+function ruleName(rule){
+  if(rule.kind==='any')return 'All mobs';
+  const items=targetItems(rule);
+  if(!items.length)return 'Filter';
+  return items.length===1?items[0].name:`${items[0].name} +${items.length-1}`;
+}
+function variantLabel(rule){
+  const slugs=ruleVariants(rule);
+  if(slugs.includes('*'))return 'All variants';
+  const names=slugs.map(slug=>catalog.variantBySlug.get(slug)?.name).filter(Boolean);
+  if(!names.length)return 'All variants';
+  return names.length<=2?names.join(', '):`${names[0]} +${names.length-1}`;
+}
+function ruleSubtitle(rule){
+  if(rule.kind==='petal')return '';
+  const rarity=catalog.rarities[rule.mobMin];
+  return `${variantLabel(rule)} · Mob ${rarity?rarity.name:'?'}+`;
+}
 
 function renderRules(){
   $('rules').replaceChildren();$('rule-count').textContent=settings.rules.filter(r=>r.enabled).length;
   $('rule-empty').hidden=settings.rules.length>0;
   for(const rule of settings.rules){
     const row=make('div',`rule${rule.enabled?'':' disabled'}`);
-    if(rule.kind==='any'){const icon=make('span','sprite small');icon.append(make('span','empty-flower','✿'));row.append(icon)}
-    else row.append(sprite(rule.kind,(rule.kind==='mob'?catalog.mobBySlug:catalog.petalBySlug).get(rule.target),{size:'small'}));
+    if(rule.kind!=='any'){
+      const items=targetItems(rule),icons=make('div','rule-icons');
+      for(const item of items.slice(0,3))icons.append(sprite(rule.kind,item,{size:'small'}));
+      if(items.length>3)icons.append(make('span','rule-more',`+${items.length-3}`));
+      row.append(icons);
+    }
     const info=make('div','rule-info');info.append(make('div','rule-name',ruleName(rule)));const subtitle=ruleSubtitle(rule);if(subtitle)info.append(make('div','rule-subtitle',subtitle));
     const actions=make('div','rule-actions'),toggle=make('label','switch'),input=make('input');input.type='checkbox';input.checked=rule.enabled;input.setAttribute('aria-label',`Enable filter for ${ruleName(rule)}`);input.onchange=()=>{rule.enabled=input.checked;save();renderRules();renderFeed()};toggle.append(input,make('span'));actions.append(toggle);
     const edit=make('button','icon-button','✎');edit.type='button';edit.title='Edit';edit.setAttribute('aria-label',`Edit ${ruleName(rule)}`);edit.onclick=()=>openEditor(rule);
@@ -68,7 +100,7 @@ function renderFeed(){
     if(dead)main.append(make('div','spawn-status',killer?`Dead by ＠${killer}`:'Dead'));
     const drops=dropsFor(catalog,event),dropRow=make('div','spawn-drops');
     for(const drop of drops.slice(0,5)){
-      const wanted=matches.some(rule=>rule.kind==='petal'&&rule.target===drop.petal.slug);
+      const wanted=matches.some(rule=>rule.kind==='petal'&&ruleTargets(rule).includes(drop.petal.slug));
       const button=make('button',`drop-button${wanted?' wanted':''}`);button.type='button';button.title=`${drop.petal.name}${drop.conditional?' (possible Flash drop)':''}`;button.setAttribute('aria-label',`Possible drops including ${drop.petal.name}`);button.append(sprite('petal',drop.petal,{size:'tiny'}));button.onclick=()=>showDrops(event);dropRow.append(button);
     }
     if(drops.length>5){const more=make('button','more-drops',`+${drops.length-5}`);more.type='button';more.setAttribute('aria-label','Show all possible drops');more.onclick=()=>showDrops(event);dropRow.append(more)}
@@ -119,41 +151,149 @@ function showDrops(event){
   $('drops-dialog').showModal();
 }
 
+function pickerItems(){const kind=$('rule-kind').value;return kind==='mob'?catalog.mobs:kind==='petal'?catalog.petals:[]}
+function visibleSlugs(){return visibleItems(pickerItems(),$('rule-target').value,normalizeName).map(item=>item.slug)}
+function updateHint(){
+  $('selection-hint').textContent=multiMode
+    ?'Multi-select on. Click icons to add or remove; Shift-click for a range.'
+    :'Click to select. Ctrl/⌘-click or press and hold to select several, Shift-click for a range.';
+  $('multi-toggle').setAttribute('aria-pressed',String(multiMode));
+  $('clear-selection').disabled=draftTargets.length===0;
+}
+function renderVariants(){
+  const everything=draftVariants.includes('*');
+  $('rule-variant-all').checked=everything;
+  for(const input of $('variant-list').querySelectorAll('input[data-variant]')){
+    input.checked=!everything&&draftVariants.includes(input.dataset.variant);
+    input.disabled=everything;
+  }
+}
+function selectedStrip(){
+  const strip=$('selected-strip'),kind=$('rule-kind').value,bySlug=kind==='mob'?catalog.mobBySlug:catalog.petalBySlug;
+  strip.replaceChildren();
+  for(const slug of draftTargets){
+    const item=bySlug.get(slug);if(!item)continue;
+    const chip=make('button','selected-chip');chip.type='button';chip.title=`Remove ${item.name}`;chip.setAttribute('aria-label',`Remove ${item.name} from selection`);
+    const icon=sprite(kind,item);icon.setAttribute('aria-hidden','true');
+    chip.append(icon,make('span','chip-name',item.name),make('span','chip-x','×'));
+    chip.onclick=()=>{draftTargets=removed(draftTargets,slug);if(anchorSlug===slug)anchorSlug=null;paintSelection()};
+    strip.append(chip);
+  }
+  strip.hidden=draftTargets.length===0;
+}
+function paintSelection(){
+  const selected=new Set(draftTargets);
+  for(const option of $('target-grid').children)option.setAttribute('aria-pressed',String(selected.has(option.dataset.target)));
+  selectedStrip();updateHint();
+}
+function cancelHold(){
+  const fired=holdFired,slug=holdSlug,pointerId=holdPointerId;
+  clearTimeout(holdTimer);holdTimer=null;holdStart=null;holdSlug=null;holdPointerId=null;holdFired=false;
+  // If the hold already fired, the remainder of that gesture must not toggle
+  // the just-added icon. Arm the same one-shot suppression as a normal release.
+  if(fired&&slug!==null)suppressClick={slug,pointerId,releasedAt:performance.now()};
+}
+function beginHold(event,slug){
+  // Primary button only. Mouse, touch and pen all participate; right/middle
+  // clicks and secondary pointers are ignored.
+  if(event.button!==0||event.isPrimary===false)return;
+  cancelHold();
+  // A new pointerdown starts a fresh gesture. Any suppression still pending
+  // from a hold that never produced a click belongs to the old gesture.
+  suppressClick=null;
+  holdStart={x:event.clientX,y:event.clientY};
+  holdSlug=slug;holdPointerId=event.pointerId;
+  holdTimer=setTimeout(()=>{
+    holdTimer=null;
+    if(holdSlug!==slug)return;
+    holdFired=true;
+    multiMode=true;
+    if(!draftTargets.includes(slug))draftTargets=[...draftTargets,slug];
+    anchorSlug=slug;
+    // The finger/mouse is still down. Only repaint attributes and the
+    // selected strip; the pressed button itself must not be replaced.
+    paintSelection();
+  },HOLD_MS);
+}
+function endHold(event){
+  if(event.pointerId!==holdPointerId)return;
+  const fired=holdFired,pressed=holdSlug;
+  cancelHold();
+  // Arm suppression only after release, so it cannot expire while the
+  // pointer is down. The matching click consumes it once. A keyboard
+  // activation (detail 0) is only treated as the gesture click when it
+  // immediately follows the release; stale suppression is cleared by the
+  // next pointerdown.
+  if(fired)suppressClick={slug:pressed,pointerId:event.pointerId,releasedAt:performance.now()};
+}
+function bindHold(button,slug){
+  button.addEventListener('pointerdown',event=>beginHold(event,slug));
+  button.addEventListener('pointermove',event=>{
+    if(event.pointerId!==holdPointerId||!holdStart)return;
+    if(holdCanceled(holdStart,event.clientX,event.clientY))cancelHold();
+  });
+  button.addEventListener('pointerup',endHold);
+  button.addEventListener('pointercancel',event=>{if(event.pointerId===holdPointerId)cancelHold()});
+  button.addEventListener('pointerleave',event=>{if(event.pointerId===holdPointerId)cancelHold()});
+  button.addEventListener('contextmenu',event=>{
+    if(holdFired||holdStart)event.preventDefault();
+  });
+}
+function chooseTarget(slug,event){
+  const held=suppressClick;
+  if(consumesHoldClick(held,slug,event.detail,performance.now())){
+    suppressClick=null;event.preventDefault();event.stopPropagation();return;
+  }
+  const mode=event.shiftKey?'range':(event.ctrlKey||event.metaKey)?'toggle':multiMode?'toggle':'single';
+  const result=selectIcon({selected:draftTargets,anchor:anchorSlug,visible:visibleSlugs(),slug,mode});
+  draftTargets=result.selected;anchorSlug=result.anchor;
+  paintSelection();
+}
 function updateTarget(){
   const kind=$('rule-kind').value;$('target-picker').hidden=kind==='any';$('rule-options').hidden=kind==='petal';
   $('target-grid').setAttribute('aria-label',kind==='mob'?'Mobs':'Petals');
   renderTargets();
 }
-function selectedTarget(){const kind=$('rule-kind').value;return (kind==='mob'?catalog.mobs:catalog.petals).find(p=>selectedTargetSlug?p.slug===selectedTargetSlug:normalizeName(p.name)===normalizeName($('rule-target').value))}
 function renderTargets(){
+  cancelHold();
   const kind=$('rule-kind').value,grid=$('target-grid');grid.replaceChildren();$('rule-error').hidden=true;
-  if(kind==='any')return;
-  const query=normalizeName($('rule-target').value),selected=selectedTarget();
-  const targets=(kind==='mob'?catalog.mobs:catalog.petals).filter(item=>normalizeName(item.name).includes(query));
+  selectedStrip();updateHint();
+  if(kind==='any'){$('target-empty').hidden=true;return}
+  const items=visibleItems(pickerItems(),$('rule-target').value,normalizeName);
   const fragment=document.createDocumentFragment();
-  for(const item of targets){
-    const button=make('button','target-option');button.type='button';button.dataset.target=item.slug;button.setAttribute('aria-label',item.name);button.setAttribute('aria-pressed',String(selected?.slug===item.slug));
+  for(const item of items){
+    const button=make('button','target-option');button.type='button';button.dataset.target=item.slug;button.setAttribute('aria-label',item.name);button.setAttribute('aria-pressed',String(draftTargets.includes(item.slug)));
     const icon=sprite(kind,item);icon.setAttribute('aria-hidden','true');button.append(icon);if(kind==='mob')button.append(make('span','target-name',item.name));
-    button.onclick=()=>{selectedTargetSlug=item.slug;$('rule-error').hidden=true;for(const option of grid.children)option.setAttribute('aria-pressed',String(option===button))};
+    button.onclick=event=>chooseTarget(item.slug,event);
+    bindHold(button,item.slug);
     fragment.append(button);
   }
-  grid.append(fragment);grid.scrollTop=0;$('target-empty').hidden=targets.length>0;
+  grid.append(fragment);grid.scrollTop=0;
+  $('target-empty').hidden=items.length>0;
+  $('target-empty').textContent=draftTargets.length?'No matches. Selected icons stay listed above.':'No matches';
 }
 function openEditor(rule){
   if(!rule&&settings.rules.length>=100){notice('You can save up to 100 filters.',true);return}
-  editingId=rule?.id||null;selectedTargetSlug=rule&&rule.kind!=='any'?rule.target:null;$('rule-title').textContent=rule?'Edit filter':'Add filter';
-  $('rule-kind').value=rule?.kind||'petal';$('rule-target').value=rule&&rule.kind!=='any'?ruleName(rule):'';
-  $('rule-variant').value=rule?.variant||'*';$('rule-mob-min').value=rule?.mobMin??8;
-  updateTarget();$('rule-error').hidden=true;$('rule-dialog').showModal();
-  if($('rule-kind').value!=='any')$('rule-target').focus();
+  cancelHold();editingId=rule?.id||null;
+  const kind=rule?.kind||'petal';
+  $('rule-title').textContent=rule?'Edit filter':'Add filter';$('rule-kind').value=kind;
+  draftTargets=rule&&kind!=='any'?[...ruleTargets(rule)]:[];
+  draftVariants=rule?[...ruleVariants(rule)]:['*'];
+  if(!draftVariants.length)draftVariants=['*'];
+  anchorSlug=null;multiMode=false;suppressClick=null;
+  $('rule-target').value='';$('rule-mob-min').value=String(kind==='petal'?8:(rule?.mobMin??8));
+  renderVariants();updateTarget();$('rule-error').hidden=true;$('rule-dialog').showModal();
+  if(kind!=='any')$('rule-target').focus();
 }
 function saveRule(event){
-  event.preventDefault();const kind=$('rule-kind').value,target=selectedTarget();
-  if(kind!=='any'&&!target){$('rule-error').textContent='Select an icon.';$('rule-error').hidden=false;$('rule-target').focus();return}
-  const previous=settings.rules.find(r=>r.id===editingId);
-  const rule={id:editingId||crypto.randomUUID(),kind,target:kind==='any'?'*':target.slug,variant:kind==='petal'?'*':$('rule-variant').value,
+  event.preventDefault();const kind=$('rule-kind').value;
+  if(kind!=='any'&&!draftTargets.length){$('rule-error').textContent='Select at least one icon.';$('rule-error').hidden=false;$('rule-target').focus();return}
+  if(kind!=='petal'&&!draftVariants.length){$('rule-error').textContent='Select at least one variant, or choose All variants.';$('rule-error').hidden=false;$('rule-variant-all').focus();return}
+  const previous=settings.rules.find(r=>r.id===editingId),limit=kind==='mob'?catalog.mobs.length:catalog.petals.length;
+  const rule={id:editingId||crypto.randomUUID(),kind,targets:kind==='any'?[]:draftTargets.slice(0,limit),
+    variants:kind==='petal'?['*']:draftVariants.slice(0,catalog.variants.length+1),
     mobMin:kind==='petal'?0:Number($('rule-mob-min').value),dropMin:0,enabled:previous?.enabled??true};
-  if(!validateRule(catalog,rule))return;
+  if(!validateRule(catalog,rule)){$('rule-error').textContent='Choose valid icons and variants.';$('rule-error').hidden=false;return}
   if(editingId)settings.rules=settings.rules.map(r=>r.id===editingId?rule:r);else settings.rules.push(rule);
   save();renderRules();renderFeed();$('rule-dialog').close();
 }
@@ -301,10 +441,29 @@ async function init(){
   const response=await fetch(__CATALOG_URL__);if(!response.ok)throw new Error('Catalog load failed');
   catalog=indexCatalog(await response.json());settings=loadSettings(catalog,validateRule);
   registration='serviceWorker' in navigator?navigator.serviceWorker.register('/sw.js').then(()=>navigator.serviceWorker.ready).catch(()=>null):Promise.resolve(null);
-  $('rule-variant').append(new Option('All variants','*'),...catalog.variants.map(v=>new Option(v.name,v.slug)));
+  const variantList=$('variant-list'),allLabel=make('label','variant-all'),allInput=make('input');
+  allInput.type='checkbox';allInput.id='rule-variant-all';allLabel.append(allInput,make('span','','All variants'));variantList.append(allLabel);
+  for(const variant of catalog.variants){
+    const label=make('label'),input=make('input');input.type='checkbox';input.dataset.variant=variant.slug;
+    label.append(input,make('span','',variant.name));variantList.append(label);
+  }
+  allInput.onchange=()=>{draftVariants=allInput.checked?['*']:[];renderVariants()};
+  for(const input of variantList.querySelectorAll('input[data-variant]'))input.onchange=()=>{
+    draftVariants=[...variantList.querySelectorAll('input[data-variant]:checked')].map(i=>i.dataset.variant);
+    renderVariants();
+  };
   for(const r of catalog.rarities)$('rule-mob-min').add(new Option(r.name,r.id));
-  $('rule-form').onsubmit=saveRule;$('rule-kind').onchange=()=>{selectedTargetSlug=null;$('rule-target').value='';$('rule-variant').value='*';$('rule-mob-min').value=8;updateTarget()};$('rule-target').oninput=()=>{selectedTargetSlug=null;renderTargets()};
-  $('add-rule').onclick=()=>openEditor();$('close-rule').onclick=$('cancel-rule').onclick=()=>$('rule-dialog').close();$('close-drops').onclick=()=>$('drops-dialog').close();
+  $('rule-form').onsubmit=saveRule;
+  $('rule-kind').onchange=()=>{cancelHold();draftTargets=[];draftVariants=['*'];anchorSlug=null;multiMode=false;suppressClick=null;$('rule-target').value='';$('rule-mob-min').value='8';renderVariants();updateTarget()};
+  $('rule-target').oninput=()=>renderTargets();
+  $('multi-toggle').onclick=()=>{multiMode=!multiMode;updateHint()};
+  $('clear-selection').onclick=()=>{draftTargets=[];anchorSlug=null;suppressClick=null;paintSelection()};
+  $('add-rule').onclick=()=>openEditor();$('close-rule').onclick=$('cancel-rule').onclick=()=>{cancelHold();$('rule-dialog').close()};$('close-drops').onclick=()=>$('drops-dialog').close();
+  $('rule-dialog').addEventListener('close',()=>{cancelHold();suppressClick=null});
+  // Scrolling the grid or the dialog cancels a pending hold. Touch panning
+  // stays native because the grid keeps its default touch-action.
+  $('target-grid').addEventListener('scroll',cancelHold,{passive:true});
+  $('rule-dialog').addEventListener('scroll',cancelHold,{passive:true,capture:true});
   for(const id of ['rule-dialog','drops-dialog'])$(id).addEventListener('click',event=>{if(event.target===$(id)){const b=$(id).getBoundingClientRect();if(event.clientX<b.left||event.clientX>b.right||event.clientY<b.top||event.clientY>b.bottom)$(id).close()}});
   $('only-matches').checked=settings.onlyMatches;$('only-matches').onchange=()=>{settings.onlyMatches=$('only-matches').checked;save();renderFeed()};
   $('notifications').onclick=enableNotifications;$('test-notification').onclick=()=>void showNotification('Zorr notifier','Desktop notifications are enabled.',{tag:'zorr-notifier-test'});

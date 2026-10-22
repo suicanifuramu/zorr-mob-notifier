@@ -36,8 +36,15 @@
     <form id="rule-form">
       <div class="dialog-heading"><h2 id="rule-title">Add filter</h2><button class="icon-button" id="close-rule" type="button" aria-label="Close">×</button></div>
       <div class="field-row"><label class="grow">Filter<select id="rule-kind"><option value="petal">Petal Filter</option><option value="mob">Mob Filter</option><option value="any">Variant Filter</option></select></label></div>
-      <div id="target-picker" class="target-picker"><label for="rule-target">Search</label><input id="rule-target" type="search" placeholder="Search by name" autocomplete="off" maxlength="80" aria-controls="target-grid"><div id="target-grid" class="target-grid" role="group" aria-label="Petals"></div><p id="target-empty" class="target-empty" role="status" hidden>No matches</p></div>
-      <div id="rule-options" class="field-row"><label class="grow">Variant<select id="rule-variant"></select></label><label class="grow">Mob rarity ≥<select id="rule-mob-min"></select></label></div>
+      <div id="target-picker" class="target-picker">
+        <div class="target-heading"><label for="rule-target">Search</label><div class="target-tools"><button id="multi-toggle" type="button" class="small-button" aria-pressed="false">Multi-select</button><button id="clear-selection" type="button" class="small-button">Clear</button></div></div>
+        <input id="rule-target" type="search" placeholder="Search by name" autocomplete="off" maxlength="80" aria-controls="target-grid">
+        <p id="selection-hint" class="selection-hint">Click to select. Ctrl/⌘-click or press and hold to select several, Shift-click for a range.</p>
+        <div id="selected-strip" class="selected-strip" role="group" aria-label="Selected icons" hidden></div>
+        <div id="target-grid" class="target-grid" role="group" aria-label="Petals"></div>
+        <p id="target-empty" class="target-empty" role="status" hidden>No matches</p>
+      </div>
+      <div id="rule-options" class="field-row"><fieldset id="variant-field" class="variant-field grow"><legend>Variant</legend><div id="variant-list" class="variant-list" role="group" aria-label="Variants"></div></fieldset><label class="grow rarity-field">Mob rarity ≥<select id="rule-mob-min"></select></label></div>
       <p id="rule-error" class="form-error" role="alert" hidden></p>
       <div class="dialog-actions"><button id="cancel-rule" type="button" class="small-button">Cancel</button><button type="submit" class="primary-button">Save</button></div>
     </form>

@@ -92,11 +92,18 @@ systemd. The console reader keeps the smaller default of 20 messages.
 
 ## What the page does
 
-Add up to 100 rules for a petal, a mob, or all mobs with a chosen variant. Petal
-rules only select a petal. Mob and variant rules can set the variant and minimum
-mob rarity, which defaults to Omega for new rules. Conditions within a rule are
-AND; rules are OR. Filter settings and notification preferences stay in the
-browser; the server receives no personal filter settings.
+Add up to 100 rules for petals, mobs, or all mobs with chosen variants. Each
+rule can include several petals or mobs: click to replace the selection,
+Ctrl/⌘-click to add or remove one, Shift-click to select a visible range, or
+press and hold an icon with a mouse, finger, or pen and then tap more. Selected
+icons stay listed above the search results in a bounded, scrollable strip, so
+changing the search never hides or clears them.
+Mob and variant rules choose variants from a checklist and can combine several;
+All variants is the default. Petal rules ignore variants and rarity. Mob and
+variant rules set the minimum mob rarity, which defaults to Omega for new rules.
+Conditions within a rule are AND; rules are OR. Filter settings and notification
+preferences stay in the browser; the server receives no personal filter
+settings.
 
 Matching includes generated eggs, Magic/Arcane replacements, variant extras,
 and possible Flash candidates. It matches **possible drops**, not confirmed
