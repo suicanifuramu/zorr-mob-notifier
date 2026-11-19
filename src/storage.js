@@ -1,7 +1,7 @@
 import {normalizeRule} from './matching.js';
 
 const KEY='zorr-notifier-settings-v1';
-const defaults=()=>({version:1,enabled:false,permissionRequested:false,onlyMatches:false,rules:[]});
+const defaults=()=>({version:1,enabled:false,permissionRequested:false,onlyAlive:false,onlyMatches:false,rules:[]});
 
 export function loadSettings(catalog,validate){
   try{const value=JSON.parse(localStorage.getItem(KEY));
@@ -9,7 +9,7 @@ export function loadSettings(catalog,validate){
     const rules=Array.isArray(value.rules)
       ?value.rules.filter(r=>validate(catalog,r)).slice(0,100).map(rule=>normalizeRule(catalog,rule)).filter(Boolean)
       :[];
-    return {...defaults(),enabled:value.enabled===true,permissionRequested:value.permissionRequested===true,onlyMatches:value.onlyMatches===true,rules};
+    return {...defaults(),enabled:value.enabled===true,permissionRequested:value.permissionRequested===true,onlyAlive:value.onlyAlive===true,onlyMatches:value.onlyMatches===true,rules};
   }catch{return defaults()}
 }
 

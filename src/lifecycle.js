@@ -13,6 +13,14 @@ export function eventSequence(event){
 
 export function isDeath(event){return event?.type==='death'||event?.dead===true}
 
+// Feed display toggles are independent: Alive only removes dead rows, while
+// Matches only keeps rows accepted by the caller's rule predicate. They never
+// affect notification delivery, which still uses the full event stream.
+export function feedEvents(events,{onlyAlive=false,onlyMatches=false}={},matches=()=>false){
+  if(!onlyAlive&&!onlyMatches)return events;
+  return events.filter(event=>(!onlyAlive||!isDeath(event))&&(!onlyMatches||matches(event)));
+}
+
 export function sortEvents(events){return [...events].sort((a,b)=>b.id-a.id)}
 
 // Merge one flat record into the local list. Returns the next list plus what

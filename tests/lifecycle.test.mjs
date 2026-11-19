@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {
   eventSequence,isDeath,mergeEvent,notificationKey,
-  normalizeKiller,deathNotificationTitle,canNotifyDeath,RECENT_MS,
+  normalizeKiller,deathNotificationTitle,canNotifyDeath,feedEvents,RECENT_MS,
 } from '../src/lifecycle.js';
 
 const spawn=overrides=>({
@@ -99,4 +99,15 @@ test('a fresh death of a long-lived spawn alerts, but old or historical deaths d
   assert.equal(canNotifyDeath(death({killedAt:null}),now),false);
   assert.equal(canNotifyDeath(death({killedAt:new Date(now+RECENT_MS+1).toISOString()}),now),false,'far-future clock skew');
   assert.equal(canNotifyDeath(spawn(),now),false);
+});
+
+test('feed display filters combine alive and rule matching without touching notifications',()=>{
+  const alive=spawn({key:'alive',id:11});
+  const dead=death({key:'dead',id:12});
+  const other=spawn({key:'other',id:13,mob:'ladybug'});
+  const all=[alive,dead,other],matching=event=>event.mob==='rock';
+  assert.equal(feedEvents(all,{}),all,'toggles off returns the untouched list');
+  assert.deepEqual(feedEvents(all,{onlyAlive:true}).map(event=>event.key),['alive','other']);
+  assert.deepEqual(feedEvents(all,{onlyMatches:true},matching).map(event=>event.key),['alive','dead'],'matches includes dead spawns');
+  assert.deepEqual(feedEvents(all,{onlyAlive:true,onlyMatches:true},matching).map(event=>event.key),['alive']);
 });

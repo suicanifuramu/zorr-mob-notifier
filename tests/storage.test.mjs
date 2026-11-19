@@ -17,9 +17,10 @@ test('legacy petal settings lose removed restrictions while mob and any keep the
   const petal={id:'petal',kind:'petal',target:'moon',variant:'demonic',mobMin:9,dropMin:7,enabled:true};
   const mob={id:'mob',kind:'mob',target:'rock',variant:'shiny',mobMin:7,dropMin:0,enabled:false};
   const any={id:'any',kind:'any',target:'*',variant:'magic',mobMin:5,dropMin:0,enabled:true};
-  const settings=read({version:1,enabled:true,permissionRequested:true,onlyMatches:true,rules:[petal,mob,any]});
+  const settings=read({version:1,enabled:true,permissionRequested:true,onlyAlive:true,onlyMatches:true,rules:[petal,mob,any]});
   assert.equal(settings.enabled,true);
   assert.equal(settings.permissionRequested,true);
+  assert.equal(settings.onlyAlive,true);
   assert.equal(settings.onlyMatches,true);
   assert.deepEqual(settings.rules,[
     {id:'petal',kind:'petal',targets:['moon'],variants:['*'],mobMin:0,dropMin:0,enabled:true},
@@ -52,9 +53,9 @@ test('settings save/reload round-trips grouped rules and notification claims sta
   };
   try{
     const rules=[{id:'petal',kind:'petal',targets:['rose','magic_rose'],variants:['*'],mobMin:0,dropMin:0,enabled:true}];
-    assert.equal(saveSettings({version:1,enabled:true,permissionRequested:false,onlyMatches:true,rules}),true);
+    assert.equal(saveSettings({version:1,enabled:true,permissionRequested:false,onlyAlive:true,onlyMatches:true,rules}),true);
     const reloaded=loadSettings(catalog,validateRule);
-    assert.deepEqual(reloaded,{version:1,enabled:true,permissionRequested:false,onlyMatches:true,rules});
+    assert.deepEqual(reloaded,{version:1,enabled:true,permissionRequested:false,onlyAlive:true,onlyMatches:true,rules});
     assert.ok(matchesRule(catalog,{mob:'ladybug',rarity:8,variant:'magic'},reloaded.rules[0]));
     const key=`storage-dedupe-${Date.now()}-${Math.random()}`;
     assert.equal(await claimNotification(key),true);

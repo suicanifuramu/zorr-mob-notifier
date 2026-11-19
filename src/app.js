@@ -2,7 +2,7 @@ import {indexCatalog,matchingRules,dropsFor,validateRule,validEvent,normalizeNam
 import {loadSettings,saveSettings,claimNotification} from './storage.js';
 import {createElement,Bell,BellRing,BellOff} from 'lucide';
 import {dropProbabilities,formatProbability} from './probability.js';
-import {eventSequence,isDeath,normalizeKiller,notificationKey,deathNotificationTitle,canNotifyDeath,mergeEvent} from './lifecycle.js';
+import {eventSequence,isDeath,normalizeKiller,notificationKey,deathNotificationTitle,canNotifyDeath,mergeEvent,feedEvents} from './lifecycle.js';
 import {HOLD_MS,visibleItems,selectIcon,removed,holdCanceled,consumesHoldClick} from './selection.js';
 
 const $=id=>document.getElementById(id);
@@ -83,7 +83,7 @@ function renderRules(){
 }
 
 function renderFeed(){
-  const filtered=settings.onlyMatches?events.filter(e=>matchingRules(catalog,e,settings.rules).length):events;
+  const filtered=feedEvents(events,settings,event=>matchingRules(catalog,event,settings.rules).length>0);
   const feed=$('feed'),fragment=document.createDocumentFragment();
   for(const event of filtered.slice(0,100)){
     const mob=catalog.mobBySlug.get(event.mob),rarity=catalog.rarities[event.rarity],variant=catalog.variantBySlug.get(event.variant);
@@ -111,7 +111,8 @@ function renderFeed(){
   }
   feed.replaceChildren(fragment);$('feed-count').textContent=filtered.length;$('feed-empty').hidden=filtered.length>0;
   if(!filtered.length){
-    $('empty-feed-title').textContent=settings.onlyMatches?'No matching spawns yet':streamConnected?'Waiting for the next spawn…':'Connecting to spawn feed…';
+    const scope=[settings.onlyAlive&&'alive',settings.onlyMatches&&'matching'].filter(Boolean);
+    $('empty-feed-title').textContent=scope.length?`No ${scope.join(' ')} spawns yet`:streamConnected?'Waiting for the next spawn…':'Connecting to spawn feed…';
   }
 }
 
@@ -465,6 +466,7 @@ async function init(){
   $('target-grid').addEventListener('scroll',cancelHold,{passive:true});
   $('rule-dialog').addEventListener('scroll',cancelHold,{passive:true,capture:true});
   for(const id of ['rule-dialog','drops-dialog'])$(id).addEventListener('click',event=>{if(event.target===$(id)){const b=$(id).getBoundingClientRect();if(event.clientX<b.left||event.clientX>b.right||event.clientY<b.top||event.clientY>b.bottom)$(id).close()}});
+  $('only-alive').checked=settings.onlyAlive;$('only-alive').onchange=()=>{settings.onlyAlive=$('only-alive').checked;save();renderFeed()};
   $('only-matches').checked=settings.onlyMatches;$('only-matches').onchange=()=>{settings.onlyMatches=$('only-matches').checked;save();renderFeed()};
   $('notifications').onclick=enableNotifications;$('test-notification').onclick=()=>void showNotification('Zorr notifier','Desktop notifications are enabled.',{tag:'zorr-notifier-test'});
   document.addEventListener('visibilitychange',renderNotificationButton);
