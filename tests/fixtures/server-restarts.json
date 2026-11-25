@@ -1,0 +1,71 @@
+{
+  "_note": "Anonymized server-restart announcements observed in the spawn channel. Message IDs, timestamps, and thumbnails are synthetic; map lists preserve the game's field shape and order.",
+  "fixtures": {
+    "multi": {
+      "message": {
+        "id": "900000000000000101",
+        "channel_id": "900000000000000000",
+        "guild_id": "900000000000000099",
+        "content": "",
+        "timestamp": "2026-11-24T18:11:30.682000+00:00",
+        "edited_timestamp": "2026-11-24T18:12:27.800000+00:00",
+        "mentions": [],
+        "attachments": [],
+        "embeds": [
+          {
+            "type": "rich",
+            "title": "Server Restarted!",
+            "description": "29 servers have restarted.",
+            "fields": [
+              {"name": "EU", "value": "```\nVoid\nOcean\nJurassic\nBio\nArctic\nDesert\nJungle\nSewers\nPlains\nHel\n```"},
+              {"name": "US", "value": "```\nJurassic\nVoid\nJungle\nOcean\nBio\nArctic\nDesert\nPlains\nSewers\nHel\n```"},
+              {"name": "AS", "value": "```\nVoid\nOcean\nHel\nJurassic\nSewers\nArctic\nDesert\nBio\nJungle\n```"}
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "key": "900000000000000101:restart",
+        "type": "restart",
+        "count": 29,
+        "servers": {
+          "EU": ["Void", "Ocean", "Jurassic", "Bio", "Arctic", "Desert", "Jungle", "Sewers", "Plains", "Hel"],
+          "US": ["Jurassic", "Void", "Jungle", "Ocean", "Bio", "Arctic", "Desert", "Plains", "Sewers", "Hel"],
+          "AS": ["Void", "Ocean", "Hel", "Jurassic", "Sewers", "Arctic", "Desert", "Bio", "Jungle"]
+        },
+        "createdAt": "2026-11-24T18:11:30.682000Z",
+        "editedAt": "2026-11-24T18:12:27.800000Z"
+      }
+    },
+    "single": {
+      "message": {
+        "id": "900000000000000102",
+        "channel_id": "900000000000000000",
+        "guild_id": "900000000000000099",
+        "content": "",
+        "timestamp": "2026-11-24T18:12:41.177000+00:00",
+        "edited_timestamp": null,
+        "mentions": [],
+        "attachments": [],
+        "embeds": [
+          {
+            "type": "rich",
+            "title": "Server Restarted!",
+            "description": "1 server has restarted.",
+            "fields": [
+              {"name": "AS", "value": "```\nPlains\n```"}
+            ]
+          }
+        ]
+      },
+      "expected": {
+        "key": "900000000000000102:restart",
+        "type": "restart",
+        "count": 1,
+        "servers": {"AS": ["Plains"]},
+        "createdAt": "2026-11-24T18:12:41.177000Z",
+        "editedAt": null
+      }
+    }
+  }
+}

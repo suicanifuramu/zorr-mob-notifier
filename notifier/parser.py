@@ -1,8 +1,9 @@
-"""Parse mob spawn and death announcements.
+"""Parse mob spawn, defeat, and server restart announcements.
 
 The game edits a spawn announcement in place when the mob dies: the title
 changes from "Mob Spawned!" to "Mob Defeated!" and the description gains a
-killer (or not). Crafted and lobby announcements are never events.
+killer (or not). Server restart announcements are separate embeds with one map
+list per region. Crafted and lobby announcements are never events.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 CATALOG_PATH = Path(__file__).resolve().parent.parent / "data" / "catalog.json"
+RESTART_REGIONS = {"EU", "US", "AS"}
 
 
 def normalized_name(value: str) -> str:
@@ -74,6 +76,10 @@ class SpawnParser:
         )
         self.damage_suffix = re.compile(
             r"\s+with\s+\d+(?:\.\d+)?\s*%\s*damage\s*[!.]?\s*$", re.IGNORECASE
+        )
+        self.restart_title = re.compile(r"^\s*server\s+restarted\s*[!.]?\s*$", re.IGNORECASE)
+        self.restart_count = re.compile(
+            r"(\d+)\s+servers?\s+(?:has|have)\s+restarted", re.IGNORECASE
         )
 
     def _identity(self, match: re.Match, message_id: str, created_at: datetime,
@@ -154,3 +160,55 @@ class SpawnParser:
                     "killedAt": _timestamp(edited_at or created_at),
                 })
         return events
+
+    @staticmethod
+    def _restart_maps(value: str) -> list[str]:
+        """Read the map list from an embed field's code block.
+
+        The game writes one map per line, optionally inside a fenced block.
+        Unknown map names are kept so a game update still produces a visible
+        event; the browser supplies the canonical ordering for known maps.
+        """
+        raw = re.sub(r"```[a-z]*", "", value or "", flags=re.IGNORECASE)
+        maps: list[str] = []
+        for line in re.split(r"[\n,]+", raw):
+            name = line.strip().strip("*_`~ ")
+            if name and len(name) <= 40 and name not in maps:
+                maps.append(name)
+        return maps
+
+    def parse_restart(self, texts: list[str], *, message_id: str, created_at: datetime,
+                      edited_at: datetime | None = None, source_url: str = "",
+                      historical: bool = False, source: str = "discord") -> list[dict]:
+        """Parse a "Server Restarted!" embed with per-region map lists."""
+        cleaned = [_clean(text, keep_underscores=False) for text in texts]
+        if not any(self.restart_title.match(text) for text in cleaned):
+            return []
+
+        count = None
+        for text in cleaned:
+            match = self.restart_count.search(text)
+            if match:
+                count = int(match.group(1))
+                break
+
+        servers: dict[str, list[str]] = {}
+        for index, text in enumerate(texts):
+            region = text.strip().upper()
+            if region not in RESTART_REGIONS or index + 1 >= len(texts):
+                continue
+            maps = self._restart_maps(texts[index + 1])
+            if maps:
+                servers[region] = maps
+        if not servers:
+            return []
+
+        total = sum(len(maps) for maps in servers.values())
+        if count is None or count < 1 or count > 10000:
+            count = total
+        return [{
+            "key": f"{message_id}:restart", "messageId": str(message_id),
+            "type": "restart", "count": count, "servers": servers,
+            "createdAt": _timestamp(created_at), "editedAt": _timestamp(edited_at),
+            "historical": historical, "source": source, "sourceUrl": source_url,
+        }]

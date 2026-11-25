@@ -31,6 +31,15 @@
       <div id="feed-empty" class="empty-feed"><p id="empty-feed-title">Connecting to spawn feed…</p></div>
     </section>
   </main>
+  <button id="restart-toggle" class="restart-fab" type="button" aria-expanded="false" aria-controls="restarts" aria-label="Show recent restarts" title="Recent restarts"><span class="restart-fab-label">Restarts</span><span id="restart-fab-cue" class="restart-fab-cue" aria-hidden="true"></span></button>
+  <div id="restarts" class="restart-popup" role="dialog" aria-labelledby="restart-title" hidden>
+    <div class="restart-popup-head">
+      <div class="restart-popup-title"><h3 id="restart-title">Recent restarts</h3></div>
+      <button id="close-restarts" class="icon-button" type="button" aria-label="Close recent restarts">×</button>
+    </div>
+    <div id="restart-list" class="restart-list" aria-label="Recent restart times by map and region"></div>
+    <p id="restart-empty" class="restart-empty">No recent restarts.</p>
+  </div>
   <footer><button id="test-notification" type="button" class="text-button">Test notification</button><a href="https://zorr.pro/" target="_blank" rel="noopener noreferrer">Zorr ↗</a></footer>
   <dialog id="rule-dialog" aria-labelledby="rule-title">
     <form id="rule-form">

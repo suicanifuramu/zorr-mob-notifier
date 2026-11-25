@@ -1,8 +1,9 @@
 import {indexCatalog,matchingRules,dropsFor,validateRule,validEvent,normalizeName,ruleTargets,ruleVariants} from './matching.js';
 import {loadSettings,saveSettings,claimNotification} from './storage.js';
-import {createElement,Bell,BellRing,BellOff} from 'lucide';
+import {createElement,Bell,BellRing,BellOff,ChevronLeft} from 'lucide';
 import {dropProbabilities,formatProbability} from './probability.js';
 import {eventSequence,isDeath,normalizeKiller,notificationKey,deathNotificationTitle,canNotifyDeath,mergeEvent,feedEvents} from './lifecycle.js';
+import {isRestart,latestRestarts,mergeRestart,restartMapSummary,restartTitle,restartBody,relativeAge,REGION_ORDER} from './restarts.js';
 import {HOLD_MS,visibleItems,selectIcon,removed,holdCanceled,consumesHoldClick} from './selection.js';
 
 const $=id=>document.getElementById(id);
@@ -14,7 +15,7 @@ let draftTargets=[],draftVariants=['*'],anchorSlug=null,multiMode=false;
 // timer that could expire while the pointer is still down.
 let holdTimer=null,holdStart=null,holdSlug=null,holdPointerId=null,holdFired=false,suppressClick=null;
 
-let events=[],streamConnected=false,botStatus=null,toastTimer,reconnectTimer,streamCursor=0;
+let events=[],restarts=[],streamConnected=false,botStatus=null,toastTimer,reconnectTimer,streamCursor=0;
 let polling=false,pollTimer,connectionTimer,connectionFailures=0;
 let permissionRequest;
 const permission=()=>('Notification' in window?Notification.permission:'unsupported');
@@ -114,6 +115,48 @@ function renderFeed(){
     const scope=[settings.onlyAlive&&'alive',settings.onlyMatches&&'matching'].filter(Boolean);
     $('empty-feed-title').textContent=scope.length?`No ${scope.join(' ')} spawns yet`:streamConnected?'Waiting for the next spawn…':'Connecting to spawn feed…';
   }
+}
+
+function mapClass(name){return `map-${String(name).toLowerCase().replace(/[^a-z0-9]+/g,'-')}`}
+function renderRestarts(){
+  const rows=restartMapSummary(restarts),list=$('restart-list');
+  list.replaceChildren();
+  if(rows.length){
+    const head=make('div','restart-row restart-head');
+    head.append(make('span'),...REGION_ORDER.map(region=>make('span','',region)));
+    list.append(head);
+  }
+  for(const {map,regions,regionTimes} of rows){
+    const row=make('div','restart-row');
+    row.append(make('span',`map-badge ${mapClass(map)}`,map));
+    for(const region of REGION_ORDER){
+      const createdAt=regionTimes[region];
+      if(createdAt){
+        const time=make('time','restart-time',relativeAge(createdAt));
+        time.dataset.restartTime=createdAt;time.dateTime=createdAt;time.title=dateFormat.format(new Date(createdAt));
+        row.append(time);
+      }else row.append(make('span','restart-time missing','—'));
+    }
+    list.append(row);
+  }
+  $('restart-empty').hidden=rows.length>0;
+  updateRestartAges();
+}
+function updateRestartAges(){
+  const now=Date.now();
+  for(const node of document.querySelectorAll('[data-restart-time]'))node.textContent=relativeAge(node.dataset.restartTime,now);
+}
+function openRestarts(){
+  $('restarts').hidden=false;$('restart-toggle').setAttribute('aria-expanded','true');
+  $('restart-toggle').setAttribute('aria-label','Hide recent restarts');$('restart-toggle').title='Hide recent restarts';
+  renderRestarts();
+}
+function closeRestarts(){
+  $('restarts').hidden=true;$('restart-toggle').setAttribute('aria-expanded','false');
+  $('restart-toggle').setAttribute('aria-label','Show recent restarts');$('restart-toggle').title='Recent restarts';
+}
+function toggleRestarts(){
+  if($('restarts').hidden)openRestarts();else closeRestarts();
 }
 
 function showDrops(event){
@@ -334,7 +377,7 @@ function requestNotifications(){
       notice('Notifications disabled. Click the bell to enable.',true);return;
     }
     settings.enabled=result==='granted';save();renderNotificationButton();
-    if(settings.enabled)notice(settings.rules.length?'Notifications enabled for new matching spawns.':'Notifications enabled. Add a filter to receive alerts.');
+    if(settings.enabled)notice(settings.rules.length?'Notifications enabled for new matching spawns and server restarts.':'Notifications enabled. Restarts alert automatically; add a filter for spawns.');
     else notice(result==='denied'?'Notifications blocked. Allow them in your browser settings, then reload.':'Notifications disabled. Click the bell to enable.');
   })();
   permissionRequest=request;
@@ -344,12 +387,12 @@ function requestNotifications(){
   request.then(clear,clear);
   return request;
 }
-async function showNotification(title,body,{tag,eventId}={}){
-  const options={body,tag,data:{eventId},renotify:false};
+async function showNotification(title,body,{tag,eventId,targetId}={}){
+  const options={body,tag,data:{eventId,targetId},renotify:false};
   try{
     const reg=await registration;
     if(reg)return await reg.showNotification(title,options);
-    const notification=new Notification(title,options);notification.onclick=()=>{window.focus();if(eventId)document.getElementById(`spawn-${eventId}`)?.scrollIntoView({block:'center',behavior:'smooth'});notification.close()};
+    const notification=new Notification(title,options);notification.onclick=()=>{window.focus();if(targetId==='restarts'){openRestarts();$('restarts').scrollIntoView({block:'center',behavior:'smooth'})}else if(targetId){const target=document.getElementById(targetId);if(target){if('open' in target)target.open=true;target.scrollIntoView({block:'center',behavior:'smooth'})}}else if(eventId)document.getElementById(`spawn-${eventId}`)?.scrollIntoView({block:'center',behavior:'smooth'});notification.close()};
   }catch{notice('Unable to show notifications. Check your browser and system notification settings.',true)}
 }
 async function notifySpawn(event){
@@ -369,6 +412,12 @@ async function notifyDeath(event){
   const labels=[...new Set(rules.map(ruleName))].join(', ');
   await showNotification(deathNotificationTitle(event),`Filters: ${labels}`,{tag:`zorr-death-${event.key}`,eventId:event.id});
 }
+async function notifyRestart(event){
+  if(!settings.enabled||permission()!=='granted'||event.historical)return;
+  const age=Date.now()-Date.parse(event.createdAt);if(age>120000||age< -30000)return;
+  if(!await claimNotification(`restart:${event.key}`))return;
+  await showNotification(restartTitle(event),restartBody(event),{tag:`zorr-restart-${event.key}`,targetId:'restarts'});
+}
 
 function renderConnection(){
   const online=streamConnected&&botStatus?.connected;
@@ -378,11 +427,21 @@ function renderConnection(){
 }
 function applySnapshot(data){
   events=(data.events||[]).filter(e=>validEvent(catalog,e)).sort((a,b)=>b.id-a.id).slice(0,200);
-  streamCursor=data.cursor||0;botStatus=data.status;streamConnected=true;renderConnection();renderFeed();
+  restarts=latestRestarts(Array.isArray(data.restarts)?data.restarts:[],100);
+  streamCursor=data.cursor||0;botStatus=data.status;streamConnected=true;renderConnection();renderRestarts();renderFeed();
   // History, including after a cursor reset, must never generate notifications.
   const target=location.hash&&document.getElementById(location.hash.slice(1));target?.scrollIntoView({block:'center'});
 }
 function applyEvent(event){
+  if(isRestart(event)){
+    const merged=mergeRestart(restarts,event);
+    if(merged.action==='stale'||merged.action==='ignored')return;
+    restarts=merged.restarts;
+    streamCursor=Math.max(streamCursor,eventSequence(event));
+    renderRestarts();renderConnection();
+    void notifyRestart(event);
+    return;
+  }
   if(!validEvent(catalog,event))return;
   const {events:next,action}=mergeEvent(events,event);
   if(action==='stale'||action==='ignored')return;
@@ -432,6 +491,10 @@ function connect(){
     if(polling)return;
     try{applyEvent(JSON.parse(message.data));resetHeartbeat()}catch{}
   });
+  stream.addEventListener('restart',message=>{
+    if(polling)return;
+    try{applyEvent(JSON.parse(message.data));resetHeartbeat()}catch{}
+  });
   stream.onerror=()=>{if(polling)return;streamConnected=false;renderConnection();if(!events.length)$('empty-feed-title').textContent='Reconnecting to spawn feed…';
     // HTTP 502/503 can put native EventSource in CLOSED, which will not retry.
     if(stream.readyState===EventSource.CLOSED){stream.close();if(++connectionFailures>=2)startPolling();else reconnectTimer=setTimeout(connect,5000)}
@@ -469,8 +532,22 @@ async function init(){
   $('only-alive').checked=settings.onlyAlive;$('only-alive').onchange=()=>{settings.onlyAlive=$('only-alive').checked;save();renderFeed()};
   $('only-matches').checked=settings.onlyMatches;$('only-matches').onchange=()=>{settings.onlyMatches=$('only-matches').checked;save();renderFeed()};
   $('notifications').onclick=enableNotifications;$('test-notification').onclick=()=>void showNotification('Zorr notifier','Desktop notifications are enabled.',{tag:'zorr-notifier-test'});
+  $('restart-fab-cue').replaceChildren(createElement(ChevronLeft,{'aria-hidden':'true',class:'lucide lucide-chevron-left',width:14,height:14}));
+  $('restart-toggle').onclick=toggleRestarts;$('close-restarts').onclick=closeRestarts;
+  document.addEventListener('click',event=>{
+    if($('restarts').hidden)return;
+    if($('restarts').contains(event.target)||$('restart-toggle').contains(event.target))return;
+    closeRestarts();
+  });
+  document.addEventListener('keydown',event=>{if(event.key==='Escape')closeRestarts()});
   document.addEventListener('visibilitychange',renderNotificationButton);
-  renderRules();renderFeed();renderNotificationButton();connect();
+  renderRules();renderRestarts();renderFeed();renderNotificationButton();connect();
+  setInterval(updateRestartAges,30000);
+  if(location.hash==='#restarts')openRestarts();
+  window.addEventListener('hashchange',()=>{
+    if(location.hash!=='#restarts')return;
+    openRestarts();$('restarts').scrollIntoView({block:'center'});
+  });
   if(!settings.permissionRequested&&permission()==='default')void requestNotifications();
 }
 if(typeof document!=='undefined')init().catch(()=>{notice('Unable to load the page. Please reload.',true,{persistent:true});$('empty-feed-title').textContent='Failed to load'});

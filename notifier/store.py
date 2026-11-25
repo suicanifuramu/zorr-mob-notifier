@@ -1,9 +1,11 @@
-"""Bounded spawn/death state with a monotonic change cursor.
+"""Bounded spawn/death/restart state with a monotonic change cursor.
 
 The ``spawns`` table keeps the current projection of every retained spawn
-(spawned or defeated). The ``changes`` table is an append-only, bounded log
-used as the delivery cursor. A death mutates the existing spawn row and appends
-a change; it never creates a second row or reuses the stable event key.
+(spawned or defeated). The ``restarts`` table keeps the latest restart
+announcement per Discord message. The ``changes`` table is an append-only,
+bounded log used as the delivery cursor. A death mutates the existing spawn row
+and appends a change; it never creates a second row or reuses the stable event
+key. A restart edit updates its row in place and keeps the original key/time.
 """
 from __future__ import annotations
 
@@ -28,8 +30,10 @@ def _flat(payload: dict) -> dict:
 
 
 class EventStore:
-    def __init__(self, path: str | Path, *, retention: int = 2000) -> None:
+    def __init__(self, path: str | Path, *, retention: int = 2000,
+                 restart_retention: int = 100) -> None:
         self.retention = max(1, retention)
+        self.restart_retention = max(1, restart_retention)
         # Keep enough change history to cover every retained projection even
         # when deaths append additional revisions.
         self.change_retention = self.retention * 2
@@ -48,6 +52,10 @@ class EventStore:
         self.db.execute(
             "CREATE TABLE IF NOT EXISTS changes (id INTEGER PRIMARY KEY AUTOINCREMENT, "
             "spawn_id INTEGER NOT NULL, event_key TEXT NOT NULL, payload TEXT NOT NULL)"
+        )
+        self.db.execute(
+            "CREATE TABLE IF NOT EXISTS restarts (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+            "event_key TEXT NOT NULL UNIQUE, payload TEXT NOT NULL)"
         )
         self.db.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         self.db.execute("CREATE INDEX IF NOT EXISTS changes_event_key ON changes(event_key)")
@@ -128,6 +136,18 @@ class EventStore:
             (self.change_retention - 1,),
         )
 
+    def _prune_restarts(self) -> None:
+        rows = self.db.execute("SELECT id, payload FROM restarts").fetchall()
+        if len(rows) <= self.restart_retention:
+            return
+        items = [
+            (restart_id, json.loads(payload).get("createdAt") or "")
+            for restart_id, payload in rows
+        ]
+        items.sort(key=lambda item: (item[1], item[0]), reverse=True)
+        for restart_id, _ in items[self.restart_retention:]:
+            self.db.execute("DELETE FROM restarts WHERE id = ?", (restart_id,))
+
     def _append_change(self, spawn_id: int, event_key: str, payload: dict) -> dict:
         clean = _flat(payload)
         sequence = self.db.execute(
@@ -143,10 +163,18 @@ class EventStore:
             (json.dumps(payload, ensure_ascii=False), spawn_id),
         )
 
+    def _write_restart_projection(self, restart_id: int, payload: dict) -> None:
+        self.db.execute(
+            "UPDATE restarts SET payload = ? WHERE id = ?",
+            (json.dumps(payload, ensure_ascii=False), restart_id),
+        )
+
     # -- writes -----------------------------------------------------------
 
     def add(self, event: dict) -> dict | None:
         """Backward-compatible entry point; dispatches by event type."""
+        if event.get("type") == "restart":
+            return self.add_restart(event)
         return self.add_death(event) if event.get("type") == "death" else self.add_spawn(event)
 
     def add_spawn(self, event: dict) -> dict | None:
@@ -170,6 +198,43 @@ class EventStore:
             self._write_projection(spawn_id, projection)
             self._prune_spawns()
             return {**projection, "id": spawn_id}
+
+    def add_restart(self, event: dict) -> dict | None:
+        """Record a server restart, updating the projection on later edits.
+
+        Repeated identical ingests (history plus a live duplicate) are no-ops.
+        An edited announcement can add maps or regions; those changes share the
+        original stable key, id, and createdAt.
+        """
+        key = event["key"]
+        incoming = _flat(event)
+        with self.db:
+            row = self.db.execute(
+                "SELECT id, payload FROM restarts WHERE event_key = ?", (key,)
+            ).fetchone()
+            if row is not None:
+                restart_id, raw = row
+                existing = json.loads(raw)
+                if incoming == {k: v for k, v in existing.items() if k not in ("id", "sequence")}:
+                    return None
+                merged = {**existing, **incoming}
+                merged["key"] = existing.get("key", key)
+                merged["createdAt"] = existing.get("createdAt") or incoming.get("createdAt")
+                change = self._append_change(restart_id, key, merged)
+                merged["sequence"] = change["sequence"]
+                self._write_restart_projection(restart_id, merged)
+                return {**merged, "id": restart_id}
+
+            projection = _flat(event)
+            restart_id = self.db.execute(
+                "INSERT INTO restarts(event_key, payload) VALUES (?,?)",
+                (key, json.dumps(projection, ensure_ascii=False)),
+            ).lastrowid
+            change = self._append_change(restart_id, key, projection)
+            projection["sequence"] = change["sequence"]
+            self._write_restart_projection(restart_id, projection)
+            self._prune_restarts()
+            return {**projection, "id": restart_id}
 
     def add_death(self, event: dict) -> dict | None:
         """Mark a spawn dead in place, or project a death seen without a spawn."""
@@ -246,6 +311,13 @@ class EventStore:
             "SELECT id, payload FROM spawns ORDER BY id DESC LIMIT ?", (max(1, limit),)
         ).fetchall()
         return [{**json.loads(payload), "id": spawn_id} for spawn_id, payload in reversed(rows)]
+
+    def latest_restarts(self, limit: int = 100) -> list[dict]:
+        """Current restart projections, newest restart first."""
+        rows = self.db.execute("SELECT id, payload FROM restarts").fetchall()
+        items = [{**json.loads(payload), "id": restart_id} for restart_id, payload in rows]
+        items.sort(key=lambda event: (event.get("createdAt") or "", event["id"]), reverse=True)
+        return items[:max(1, limit)]
 
     def after(self, cursor: int) -> list[dict]:
         """Flat change records newer than the change cursor, chronologically."""

@@ -1,9 +1,10 @@
 # zorr-mob-notifier
 
-A spawn feed and desktop-alert web app for Zorr. It reads spawn and defeat
-announcements from one Discord channel, serves them through an authenticated
-event API, and filters them in the browser. The frontend runs on Cloudflare
-Pages + Pages Functions; the Discord reader runs on any small always-on host.
+A spawn feed and desktop-alert web app for Zorr. It reads spawn, defeat, and
+server-restart announcements from one Discord channel, serves them through an
+authenticated event API, and filters them in the browser. The frontend runs on
+Cloudflare Pages + Pages Functions; the Discord reader runs on any small
+always-on host.
 
 This is an unofficial fan project. It is not affiliated with the game's
 developers.
@@ -90,6 +91,13 @@ repeated installer runs. Editing the service template does not update an
 already installed unit; re-run the installer or update `ExecStart` and reload
 systemd. The console reader keeps the smaller default of 20 messages.
 
+Because the channel can produce hundreds of spawn and craft messages per hour,
+the normal history window may only cover a few minutes. On startup the reader
+also searches the channel for the newest 25 `Server Restarted!` announcements
+and ingests them as history, so restarts from the previous few days survive a
+restart of the notifier. `--no-backfill` skips both the history dump and this
+restart reconciliation.
+
 ## What the page does
 
 Add up to 100 rules for petals, mobs, or all mobs with chosen variants. Each
@@ -130,6 +138,18 @@ preserved. A defeat alert uses the edit time as the death time and its own
 notification key, so a spawn and its later death each alert once. Kills are
 matched only by the exact Discord message ID, never by mob name or timing.
 
+Server restart announcements are parsed separately and shown in a **Recent
+restarts** popup. The floating **Restarts** button sits at the right edge when
+closed; opening slides the popup in from the right and shifts the button to the
+popup's left (a bottom sheet with a bottom-right button on narrow screens; it
+closes on outside click or Escape). Each map row shows the latest restart time
+for AS, US and EU independently, because a later single-region announcement
+does not change the other regions. Map badges follow the gallery order
+(Plains, Desert, Ocean, Jungle, Arctic, Bio, Void, Hel, Sewers, Jurassic).
+Restarts trigger their own desktop alert when notifications are enabled; they
+are not filtered by petal/mob rules. The popup keeps the last week of restart
+information.
+
 On the first visit the page asks for notification permission once. Browsers may
 ignore or auto-dismiss a permission prompt that was not triggered by a click, so
 the bell offers a click-triggered retry; Safari requires that click. The bell
@@ -140,29 +160,31 @@ settings and reload; the page cannot show the native prompt again.
 
 ## Event API
 
-The bot keeps up to 2,000 current spawn records in `var/spawns.sqlite3`. A death
-mutates its spawn record in place; a separate bounded change log (4,000
-revisions) supplies the monotonic delivery cursor. A death never creates a
-second feed row, and its stable ID and key never change. Old databases migrate
-automatically on startup: each existing row becomes its initial `spawn` change
-at the same cursor ID, preserving stable IDs, sparse ID gaps, and client
-cursors. Existing files are never reset.
+The bot keeps up to 2,000 current spawn records in `var/spawns.sqlite3` and up
+to 100 current restart announcements. A death mutates its spawn record in
+place; a separate bounded change log (4,000 revisions) supplies the monotonic
+delivery cursor. A death never creates a second feed row, and its stable ID and
+key never change. Old databases migrate automatically on startup: each
+existing row becomes its initial `spawn` change at the same cursor ID,
+preserving stable IDs, sparse ID gaps, and client cursors. Existing files are
+never reset.
 
 - `GET /api/stream` supports `Last-Event-ID` and `?after=` for SSE resumption.
 - `GET /api/events?after=` offers the same snapshot/delta protocol as JSON.
 - `GET /api/status` reports Discord connectivity, parser failures, and the last
-  spawn/death times.
+  spawn/death/restart times.
 - `GET /healthz` is a public liveness endpoint.
 
 All three `/api/*` endpoints require `Authorization: Bearer <API_TOKEN>`.
 Snapshots contain current records (`type`, `dead`, `sequence`, `killedBy`,
-`killedAt`); deltas are flat spawn/death change records ordered by change
-cursor. An expired cursor produces a silent snapshot with `reset: true`.
+`killedAt`) plus a `restarts` array; deltas are flat spawn/death/restart change
+records ordered by change cursor. An expired cursor produces a silent snapshot
+with `reset: true`.
 Browsers use SSE first, then fall back to five-second polling if a proxy buffers
 the stream or heartbeats stop. Both paths filter locally and deduplicate
 notifications using the same cursor, stable keys, and event types.
 
-The API publishes spawn/death metadata and links, not arbitrary channel
+The API publishes spawn/death/restart metadata and links, not arbitrary channel
 messages, author details, or Discord credentials. Keep `DISCORD_TOKEN` and
 `API_TOKEN` on the server. The Pages Function adds the API bearer token
 server-side, so it is never sent to the browser.
@@ -232,13 +254,14 @@ npm run test:python
 npm run build
 ```
 
-The Python tests cover the real spawn and defeat announcement forms, all current
-mob names, crafted/unknown exclusion, exact-message death correlation, killer
-parsing, persistent deduplication without resurrection, old-schema migration,
-retention and cursor resets, SSE history/replay/reset, and live-configuration
-validation. The JavaScript tests cover authenticated proxy behavior and
-petal/mob/variant filter semantics, notification state, and asset frame
-resolution.
+The Python tests cover the real spawn, defeat, and server-restart announcement
+forms, all current mob names, crafted/unknown exclusion, exact-message death
+correlation, killer parsing, restart map/region parsing, persistent
+deduplication without resurrection, old-schema migration, retention and cursor
+resets, SSE history/replay/reset, and live-configuration validation. The
+JavaScript tests cover authenticated proxy behavior and petal/mob/variant
+filter semantics, restart map ordering and ages, notification state, and asset
+frame resolution.
 
 ## Data and asset refresh
 

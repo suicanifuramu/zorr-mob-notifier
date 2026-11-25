@@ -13,8 +13,10 @@ import sys
 from contextlib import suppress
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import discord
+from discord.http import Route
 from dotenv import dotenv_values
 from aiohttp import web
 
@@ -129,6 +131,41 @@ def format_message(message: discord.Message) -> str:
     return f"[{stamp}] {message.author} ({message.author.id}): {body}"
 
 
+def parse_search_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def search_message(data: dict, guild_id: int, channel_id: int) -> SimpleNamespace | None:
+    """Adapt a Discord search result to the attributes used by SpawnService."""
+    try:
+        message_id = int(data["id"])
+        created_at = parse_search_time(data.get("timestamp"))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if created_at is None or str(data.get("channel_id") or "") != str(channel_id):
+        return None
+    embeds = []
+    for embed in data.get("embeds") or []:
+        embeds.append(SimpleNamespace(
+            title=embed.get("title"),
+            description=embed.get("description"),
+            fields=[
+                SimpleNamespace(name=field.get("name", ""), value=field.get("value", ""))
+                for field in embed.get("fields") or []
+            ],
+        ))
+    return SimpleNamespace(
+        id=message_id,
+        content=data.get("content") or "",
+        embeds=embeds,
+        created_at=created_at,
+        edited_at=parse_search_time(data.get("edited_timestamp")),
+        jump_url=f"https://discord.com/channels/{guild_id}/{channel_id}/{message_id}",
+    )
+
+
 class ChannelReader(discord.Client):
     def __init__(
         self, *, limit: int, backfill: bool, service: SpawnService | None = None,
@@ -178,6 +215,7 @@ class ChannelReader(discord.Client):
         if self.backfill and not self._history_done:
             self._history_done = True
             await self.dump_history(channel)
+            await self.backfill_restarts()
 
         log.info("Streaming new messages. Ctrl-C to stop.")
         if self.service:
@@ -193,6 +231,48 @@ class ChannelReader(discord.Client):
                 self.service.ingest(message, historical=True)
             count += 1
         print(f"--- {count} message(s) ---")
+
+    async def backfill_restarts(self) -> None:
+        """Recover recent restart embeds that the small spawn history missed.
+
+        The channel can produce hundreds of spawn/craft messages per hour, so
+        the normal ``--limit`` window may not reach the last restart. Discord
+        search is available to user accounts and lets us ingest the newest 25
+        restart announcements without walking thousands of messages.
+        """
+        if not self.service:
+            return
+        route = Route(
+            "GET", "/guilds/{guild_id}/messages/search", guild_id=self.guild_id
+        )
+        try:
+            data = await self.http.request(route, params={
+                "content": "Server Restarted", "channel_id": self.channel_id,
+                "limit": 25, "sort_by": "timestamp", "sort_order": "desc",
+            })
+        except discord.HTTPException as exc:
+            log.warning("Cannot search recent restart announcements: %s", exc)
+            return
+
+        if not isinstance(data, dict):
+            log.warning("Cannot search recent restart announcements: unexpected response")
+            return
+        groups = data.get("messages") or []
+        raw = [group[0] if isinstance(group, list) else group for group in groups]
+        raw.sort(key=lambda item: int(item.get("id") or 0))
+        seen: set[int] = set()
+        count = 0
+        for item in raw:
+            message = search_message(item, self.guild_id, self.channel_id)
+            if message is None or message.id in seen:
+                continue
+            titles = [(embed.title or "").strip().lower() for embed in message.embeds]
+            if "server restarted!" not in titles:
+                continue
+            seen.add(message.id)
+            self.service.ingest(message, historical=True)
+            count += 1
+        log.info("Backfilled %d server restart message(s)", count)
 
     async def on_message(self, message: discord.Message) -> None:
         guild = getattr(message, "guild", None)
@@ -213,6 +293,8 @@ class ChannelReader(discord.Client):
             changes = self.service.ingest(after)
             if changes and any(change.get("type") == "death" for change in changes):
                 log.info("Recorded death for message %s", after.id)
+            if changes and any(change.get("type") == "restart" for change in changes):
+                log.info("Recorded restart update for message %s", after.id)
 
     async def on_raw_message_edit(self, payload: discord.RawMessageUpdateEvent) -> None:
         # Announcement messages are not cached after a restart or when they

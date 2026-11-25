@@ -20,7 +20,13 @@ def is_death(event: dict) -> bool:
     return event.get("type") == "death" or event.get("dead") is True
 
 
+def is_restart(event: dict) -> bool:
+    return event.get("type") == "restart"
+
+
 def event_name(event: dict) -> str:
+    if is_restart(event):
+        return "restart"
     return "death" if is_death(event) else "spawn"
 
 
@@ -35,22 +41,35 @@ class SpawnService:
         self.last_message_at = None
         self.last_spawn_at = None
         self.last_death_at = None
+        recent_restarts = self.store.latest_restarts(1)
+        self.last_restart_at = recent_restarts[0].get("createdAt") if recent_restarts else None
         self.backfill_complete = False
         self.unparsed_spawns = 0
         self.unparsed_deaths = 0
+        self.unparsed_restarts = 0
 
     def status(self) -> dict:
         return {"connected": self.connected, "demo": self.demo, "startedAt": self.started_at,
                 "lastMessageAt": self.last_message_at, "lastSpawnAt": self.last_spawn_at,
-                "lastDeathAt": self.last_death_at,
+                "lastDeathAt": self.last_death_at, "lastRestartAt": self.last_restart_at,
                 "backfillComplete": self.backfill_complete, "cursor": self.store.cursor,
-                "unparsedSpawns": self.unparsed_spawns, "unparsedDeaths": self.unparsed_deaths}
+                "unparsedSpawns": self.unparsed_spawns, "unparsedDeaths": self.unparsed_deaths,
+                "unparsedRestarts": self.unparsed_restarts}
 
     def ingest(self, message, *, historical: bool = False) -> list[dict]:
         self.last_message_at = now()
         texts = message_texts(message)
         message_id = str(message.id)
         source_url = getattr(message, "jump_url", "") or ""
+        restarts = self.parser.parse_restart(
+            texts, message_id=message_id, created_at=message.created_at,
+            edited_at=getattr(message, "edited_at", None),
+            source_url=source_url, historical=historical,
+        )
+        if restarts:
+            return [event for event in (self.publish(item) for item in restarts) if event]
+        if any("server restarted" in text.lower() for text in texts):
+            self.unparsed_restarts += 1
         deaths = self.parser.parse_death(
             texts, message_id=message_id, created_at=message.created_at,
             edited_at=getattr(message, "edited_at", None),
@@ -67,13 +86,19 @@ class SpawnService:
         return [event for event in (self.publish(item) for item in events) if event]
 
     def publish(self, event: dict) -> dict | None:
-        if is_death(event):
+        if is_restart(event):
+            event = self.store.add_restart(event)
+        elif is_death(event):
             event = self.store.add_death(event)
         else:
             event = self.store.add_spawn(event)
         if not event:
             return None
-        if is_death(event):
+        if is_restart(event):
+            restart_at = event.get("createdAt")
+            if restart_at and (self.last_restart_at is None or restart_at > self.last_restart_at):
+                self.last_restart_at = restart_at
+        elif is_death(event):
             self.last_death_at = event.get("killedAt")
         else:
             self.last_spawn_at = event["createdAt"]
@@ -104,9 +129,12 @@ def history_payload(service: SpawnService, after: int) -> dict:
     current = service.store.cursor
     expired = after > current or (after and after < service.store.first_id - 1)
     snapshot = not after or bool(expired)
-    return {"snapshot": snapshot, "reset": bool(expired), "cursor": current,
-            "events": service.store.latest() if snapshot else service.store.after(after),
-            "status": service.status()}
+    payload = {"snapshot": snapshot, "reset": bool(expired), "cursor": current,
+               "events": service.store.latest() if snapshot else service.store.after(after),
+               "status": service.status()}
+    if snapshot:
+        payload["restarts"] = service.store.latest_restarts()
+    return payload
 
 
 def create_app(service: SpawnService, token: str, *, heartbeat: float = 15) -> web.Application:

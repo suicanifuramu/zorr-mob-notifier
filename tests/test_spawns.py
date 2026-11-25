@@ -20,6 +20,9 @@ from notifier.store import EventStore
 FIXTURES = json.loads(
     (Path(__file__).parent / "fixtures" / "discord-lifecycle.json").read_text()
 )["fixtures"]
+RESTART_FIXTURES = json.loads(
+    (Path(__file__).parent / "fixtures" / "server-restarts.json").read_text()
+)["fixtures"]
 UTC = timezone.utc
 
 
@@ -31,7 +34,12 @@ def fake_embed(data):
     thumbnail = data.get("thumbnail") or {}
     return SimpleNamespace(
         type=data.get("type"), title=data.get("title"), description=data.get("description"),
-        color=data.get("color"), fields=[], url=data.get("url"), image=None,
+        color=data.get("color"),
+        fields=[
+            SimpleNamespace(name=field["name"], value=field["value"])
+            for field in data.get("fields", [])
+        ],
+        url=data.get("url"), image=None,
         thumbnail=SimpleNamespace(
             url=thumbnail.get("url"), width=thumbnail.get("width"),
             height=thumbnail.get("height"),
@@ -71,6 +79,17 @@ def death_event(parser, message_id="1", text="A Demonic Omega Tumbleweed was def
         [text], message_id=message_id,
         created_at=created_at or datetime(2026, 10, 21, 12, 0, tzinfo=UTC),
         edited_at=edited_at or datetime(2026, 10, 21, 12, 10, tzinfo=UTC),
+        historical=historical,
+    )[0]
+
+
+def restart_event(parser, message_id="1", texts=None, *, created_at=None,
+                  edited_at=None, historical=False):
+    return parser.parse_restart(
+        texts or ["Server Restarted!", "1 server has restarted.", "AS", "```\nPlains\n```"],
+        message_id=message_id,
+        created_at=created_at or datetime(2026, 11, 24, 18, 12, tzinfo=UTC),
+        edited_at=edited_at,
         historical=historical,
     )[0]
 
@@ -196,6 +215,45 @@ class ParserTests(unittest.TestCase):
         for mob in self.parser.mobs.values():
             got = spawn_event(self.parser, text=f"An Omega {mob['name']} has spawned!")
             self.assertEqual(got["mob"], mob["slug"])
+
+    def test_server_restart_announcements_preserve_region_map_lists(self):
+        for name, fixture in RESTART_FIXTURES.items():
+            with self.subTest(fixture=name):
+                message = fake_message(fixture["message"])
+                got = self.parser.parse_restart(
+                    message_texts(message), message_id=str(message.id),
+                    created_at=message.created_at, edited_at=message.edited_at,
+                    source_url=message.jump_url,
+                )
+                self.assertEqual(len(got), 1)
+                event = got[0]
+                expected = fixture["expected"]
+                self.assertEqual(event["key"], expected["key"])
+                self.assertEqual(event["type"], "restart")
+                self.assertEqual(event["count"], expected["count"])
+                self.assertEqual(event["servers"], expected["servers"])
+                self.assertEqual(event["createdAt"], expected["createdAt"])
+                self.assertEqual(event["editedAt"], expected["editedAt"])
+                self.assertEqual(event["sourceUrl"], message.jump_url)
+                self.assertFalse(event["historical"])
+
+    def test_restart_parser_rejects_spawns_defeats_and_empty_restarts(self):
+        spawn = fake_message(FIXTURES["alive_spawn"]["message"])
+        death = fake_message(FIXTURES["edit_known_killer"]["after"])
+        for message in [spawn, death]:
+            self.assertEqual(
+                self.parser.parse_restart(
+                    message_texts(message), message_id=str(message.id),
+                    created_at=message.created_at, edited_at=message.edited_at,
+                ), []
+            )
+        self.assertEqual(
+            self.parser.parse_restart(
+                ["Server Restarted!", "1 server has restarted."],
+                message_id="empty", created_at=datetime.now(UTC),
+            ), [],
+            "a restart without region fields is not an event",
+        )
 
 
 class StoreTests(unittest.TestCase):
@@ -403,6 +461,48 @@ async def frame(response):
             "data": json.loads(next(s[6:] for s in lines if s.startswith("data: ")))}
 
 
+    def test_restart_projection_dedup_edit_and_retention(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "restarts.db"
+            store = EventStore(path, retention=10, restart_retention=2)
+            message = fake_message(RESTART_FIXTURES["single"]["message"])
+            event = self.parser.parse_restart(
+                message_texts(message), message_id=str(message.id),
+                created_at=message.created_at, edited_at=message.edited_at,
+            )[0]
+            first = store.add_restart(event)
+            self.assertEqual(first["type"], "restart")
+            self.assertIsNone(store.add_restart(event), "duplicate history is a no-op")
+            self.assertEqual(store.latest(10), [], "restarts are not spawn projections")
+
+            edited = {
+                **event, "count": 2, "servers": {"AS": ["Plains", "Desert"]},
+                "editedAt": "2026-11-24T18:20:00Z",
+            }
+            updated = store.add_restart(edited)
+            self.assertEqual(updated["id"], first["id"], "an edit keeps the stable id")
+            self.assertEqual(updated["createdAt"], first["createdAt"], "restart time never moves")
+            self.assertEqual(updated["count"], 2)
+            self.assertGreater(updated["sequence"], first["sequence"])
+            self.assertEqual(len(store.latest_restarts()), 1)
+            self.assertEqual([c["type"] for c in store.after(0)], ["restart", "restart"])
+            store.close()
+
+            store = EventStore(path, retention=10, restart_retention=2)
+            self.assertEqual(store.latest_restarts()[0]["count"], 2)
+            for message_id in ["2", "3"]:
+                message = fake_message(RESTART_FIXTURES["single"]["message"])
+                event = self.parser.parse_restart(
+                    message_texts(message), message_id=message_id,
+                    created_at=message.created_at,
+                )[0]
+                store.add_restart(event)
+            self.assertEqual(len(store.latest_restarts()), 2, "restart retention is bounded")
+            self.assertEqual([r["messageId"] for r in store.latest_restarts()], ["3", "2"])
+            self.assertEqual(store.add(spawn_event(self.parser, "add"))["type"], "spawn", "add() keeps its legacy dispatch")
+            store.close()
+
+
 class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.store = EventStore(":memory:", retention=3)
@@ -421,6 +521,9 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
 
     def death(self, message_id, historical=False):
         return self.service.publish(death_event(self.service.parser, message_id, historical=historical))
+
+    def restart(self, message_id, historical=False):
+        return self.service.publish(restart_event(self.service.parser, message_id, historical=historical))
 
     async def test_requires_bearer_and_rejects_invalid_cursor(self):
         self.assertEqual((await self.client.get("/api/status")).status, 401)
@@ -465,6 +568,48 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(replay["data"]["type"], "death")
         self.assertEqual(replay["data"]["sequence"], death["sequence"])
         resumed_death.close()
+
+    async def test_restart_snapshot_delta_and_stream_broadcast(self):
+        history = self.restart("history", historical=True)
+        response = await self.client.get("/api/events", headers=self.headers)
+        snapshot = await response.json()
+        self.assertTrue(snapshot["snapshot"])
+        self.assertEqual(snapshot["events"], [], "restarts are not spawn rows")
+        self.assertEqual(snapshot["restarts"][0]["key"], history["key"])
+        self.assertEqual(snapshot["restarts"][0]["type"], "restart")
+
+        live = self.restart("live")
+        delta = await (await self.client.get(
+            f"/api/events?after={history['sequence']}", headers=self.headers
+        )).json()
+        self.assertFalse(delta["snapshot"])
+        self.assertEqual([event["key"] for event in delta["events"]], [live["key"]])
+        self.assertEqual(delta["events"][0]["type"], "restart")
+
+        stream = await self.client.get("/api/stream", headers=self.headers)
+        initial = await frame(stream)
+        self.assertEqual(initial["event"], "snapshot")
+        self.assertEqual(initial["data"]["restarts"][0]["key"], live["key"])
+        await frame(stream)  # status
+        fresh = self.restart("fresh")
+        event = await frame(stream)
+        self.assertEqual(event["event"], "restart")
+        self.assertEqual(event["data"]["key"], fresh["key"])
+        self.assertEqual(event["data"]["sequence"], fresh["sequence"])
+        stream.close()
+        self.assertEqual(self.service.last_restart_at, fresh["createdAt"])
+
+    async def test_ingest_restart_announcement(self):
+        message = fake_message(RESTART_FIXTURES["multi"]["message"])
+        changes = self.service.ingest(message, historical=True)
+        self.assertEqual(len(changes), 1)
+        self.assertEqual(changes[0]["type"], "restart")
+        self.assertEqual(changes[0]["count"], 29)
+        self.assertEqual(changes[0]["servers"]["AS"][-1], "Jungle")
+        self.assertEqual(self.service.last_spawn_at, None)
+        self.assertEqual(self.service.last_death_at, None)
+        self.assertEqual(self.service.last_restart_at, changes[0]["createdAt"])
+        self.assertEqual(len(self.store.latest_restarts()), 1)
 
     async def test_polling_snapshot_delta_and_death_replay(self):
         spawn = self.spawn("history", historical=True)
@@ -515,11 +660,16 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_status_reports_death_fields(self):
         self.spawn("s")
         self.death("s")
+        restart = self.restart("r")
         response = await self.client.get("/api/status", headers=self.headers)
         status = await response.json()
         self.assertIn("lastDeathAt", status)
         self.assertIn("unparsedDeaths", status)
+        self.assertIn("lastRestartAt", status)
+        self.assertIn("unparsedRestarts", status)
+        self.assertEqual(status["lastRestartAt"], restart["createdAt"])
         self.assertEqual(status["cursor"], self.store.cursor)
+        self.assertEqual(SpawnService(self.store).last_restart_at, restart["createdAt"])
 
     async def test_ingest_defeated_message_creates_no_spawn_alert(self):
         fixture = FIXTURES["edit_unknown_killer"]
@@ -572,4 +722,40 @@ class RawEditTests(unittest.IsolatedAsyncioTestCase):
         ]:
             self.channel.fetch_message.side_effect = error
             await self.reader.on_raw_message_edit(self.payload)
+        self.service.ingest.assert_not_called()
+
+
+class RestartBackfillTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.service = SimpleNamespace(ingest=Mock(return_value=[]))
+        self.reader = ChannelReader(limit=1, backfill=True, service=self.service)
+        self.message = {
+            **RESTART_FIXTURES["multi"]["message"],
+            "channel_id": str(main.CHANNEL_ID), "guild_id": str(main.GUILD_ID),
+        }
+        self.reader.http = SimpleNamespace(request=AsyncMock(return_value={"messages": [[self.message]]}))
+
+    async def test_search_ingests_newest_restart_embeds_as_history(self):
+        await self.reader.backfill_restarts()
+        self.service.ingest.assert_called_once()
+        message, = self.service.ingest.call_args.args
+        self.assertEqual(message.id, int(self.message["id"]))
+        self.assertTrue(self.service.ingest.call_args.kwargs["historical"])
+        self.assertEqual(message.embeds[0].title, "Server Restarted!")
+        self.assertEqual(message.embeds[0].fields[0].name, "EU")
+        self.assertEqual(message.created_at.isoformat(), "2026-11-24T18:11:30.682000+00:00")
+
+    async def test_search_filters_other_channels_and_non_restarts(self):
+        other = {**self.message, "channel_id": "5"}
+        spawn = {**self.message, "id": "900000000000000103",
+                 "embeds": [{"title": "Mob Spawned!", "description": "An Omega Rock has spawned!"}]}
+        self.reader.http.request.return_value = {"messages": [[other], [spawn]]}
+        await self.reader.backfill_restarts()
+        self.service.ingest.assert_not_called()
+
+    async def test_search_failure_does_not_block_the_live_reader(self):
+        self.reader.http.request.side_effect = discord.HTTPException(
+            SimpleNamespace(status=500, reason="Server Error"), "Server Error"
+        )
+        await self.reader.backfill_restarts()
         self.service.ingest.assert_not_called()
